@@ -250,6 +250,10 @@ body {
   text-anchor: middle;
 }
 
+.topologyEdgeLabel.lossy {
+  fill: var(--danger);
+}
+
 .statusList {
   display: grid;
   gap: 8px;

@@ -77,7 +77,8 @@ function renderTopologyCanvas(positions) {
     const classes = `topologyEdge ${running ? "healthy" : "down"}${related ? " related" : ""}${selectedNodeName && !related ? " dimmed" : ""}`;
     let label = "";
     if (related) {
-      const labelText = linkMetricLabel(edge.local_latency_ms ?? edge.peer_latency_ms, edge.local_packet_loss_percent ?? edge.peer_packet_loss_percent);
+      const packetLoss = edge.local_packet_loss_percent ?? edge.peer_packet_loss_percent;
+      const labelText = linkMetricLabel(edge.local_latency_ms ?? edge.peer_latency_ms, packetLoss);
       if (labelText !== "- / -") {
         const labelAnchor = selectedNodeName === edge.local_node_name ? source : target;
         const labelPeer = selectedNodeName === edge.local_node_name ? target : source;
@@ -86,7 +87,7 @@ function renderTopologyCanvas(positions) {
         const length = Math.hypot(dx, dy) || 1;
         const labelX = labelAnchor.x + (labelPeer.x - labelAnchor.x) * 0.52 + (-dy / length) * 14;
         const labelY = labelAnchor.y + (labelPeer.y - labelAnchor.y) * 0.52 + (dx / length) * 14;
-        label = `<text class="topologyEdgeLabel" x="${labelX}" y="${labelY}">${esc(labelText)}</text>`;
+        label = `<text class="topologyEdgeLabel${packetLoss > 0 ? " lossy" : ""}" x="${labelX}" y="${labelY}">${esc(labelText)}</text>`;
       }
     }
     return {

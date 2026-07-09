@@ -64,27 +64,38 @@ function renderTopologyCanvas(positions) {
   if (topology.nodes.length === 0) {
     return '<div class="topologyCanvas"><div class="empty">暂无节点。Agent 连接后会显示 dn42 拓扑。</div></div>';
   }
-  const edges = [...topology.edges].sort((a, b) => {
+  const edgeParts = [...topology.edges].sort((a, b) => {
     const aRelated = Number(selectedNodeName === a.local_node_name || selectedNodeName === a.peer_node_name);
     const bRelated = Number(selectedNodeName === b.local_node_name || selectedNodeName === b.peer_node_name);
     return aRelated - bRelated;
   }).map((edge) => {
     const source = positions[edge.local_node_name];
     const target = positions[edge.peer_node_name];
-    if (!source || !target) return "";
+    if (!source || !target) return { line: "", label: "" };
     const running = edge.local_status === "running" && edge.peer_status === "running";
     const related = selectedNodeName === edge.local_node_name || selectedNodeName === edge.peer_node_name;
-    const label = linkMetricLabel(edge.local_latency_ms ?? edge.peer_latency_ms, edge.local_packet_loss_percent ?? edge.peer_packet_loss_percent);
-    const labelAnchor = selectedNodeName === edge.local_node_name ? source : target;
-    const labelPeer = selectedNodeName === edge.local_node_name ? target : source;
-    const labelX = related ? labelAnchor.x + (labelPeer.x - labelAnchor.x) * 0.58 : (source.x + target.x) / 2;
-    const labelY = related ? labelAnchor.y + (labelPeer.y - labelAnchor.y) * 0.58 - 6 : (source.y + target.y) / 2 - 8;
-    const labelText = related && label !== "- / -" ? label : "";
-    return `<g class="topologyEdge ${running ? "healthy" : "unknown"}${related ? " related" : ""}${selectedNodeName && !related ? " dimmed" : ""}">
-      <line x1="${source.x}" y1="${source.y}" x2="${target.x}" y2="${target.y}"></line>
-      <text x="${labelX}" y="${labelY}">${esc(labelText)}</text>
-    </g>`;
-  }).join("");
+    const classes = `topologyEdge ${running ? "healthy" : "down"}${related ? " related" : ""}${selectedNodeName && !related ? " dimmed" : ""}`;
+    let label = "";
+    if (related) {
+      const labelText = linkMetricLabel(edge.local_latency_ms ?? edge.peer_latency_ms, edge.local_packet_loss_percent ?? edge.peer_packet_loss_percent);
+      if (labelText !== "- / -") {
+        const labelAnchor = selectedNodeName === edge.local_node_name ? source : target;
+        const labelPeer = selectedNodeName === edge.local_node_name ? target : source;
+        const dx = target.x - source.x;
+        const dy = target.y - source.y;
+        const length = Math.hypot(dx, dy) || 1;
+        const labelX = labelAnchor.x + (labelPeer.x - labelAnchor.x) * 0.52 + (-dy / length) * 14;
+        const labelY = labelAnchor.y + (labelPeer.y - labelAnchor.y) * 0.52 + (dx / length) * 14;
+        label = `<text class="topologyEdgeLabel" x="${labelX}" y="${labelY}">${esc(labelText)}</text>`;
+      }
+    }
+    return {
+      line: `<g class="${classes}"><line x1="${source.x}" y1="${source.y}" x2="${target.x}" y2="${target.y}"></line></g>`,
+      label,
+    };
+  });
+  const edges = edgeParts.map((edge) => edge.line).join("");
+  const edgeLabels = edgeParts.map((edge) => edge.label).join("");
   const nodes = topology.nodes.map((node) => {
     const position = positions[node.name] || { x: TOPOLOGY_WIDTH / 2, y: TOPOLOGY_HEIGHT / 2 };
     const online = node.status === "online";
@@ -98,7 +109,7 @@ function renderTopologyCanvas(positions) {
     </g>`;
   }).join("");
   return `<div class="topologyCanvas">
-    <svg class="topologySvg" viewBox="0 0 ${TOPOLOGY_WIDTH} ${TOPOLOGY_HEIGHT}" role="img">${edges}${nodes}</svg>
+    <svg class="topologySvg" viewBox="0 0 ${TOPOLOGY_WIDTH} ${TOPOLOGY_HEIGHT}" role="img">${edges}${nodes}${edgeLabels}</svg>
   </div>`;
 }
 

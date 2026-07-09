@@ -236,9 +236,14 @@ body {
   stroke: var(--success);
 }
 
-.topologyEdge text {
+.topologyEdge.down line {
+  stroke: var(--danger);
+}
+
+.topologyEdgeLabel {
   fill: var(--strong);
   font-size: 11px;
+  pointer-events: none;
   paint-order: stroke;
   stroke: var(--surface);
   stroke-width: 4px;

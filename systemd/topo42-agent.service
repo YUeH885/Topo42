@@ -4,14 +4,14 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-ExecStart=/usr/bin/topo42-agent http://127.0.0.1:8000 dn42_cn01 change-me
+ExecStart=/usr/bin/topo42-agent ws://127.0.0.1:8000 dn42_cn01 change-me
 Restart=on-failure
 DynamicUser=yes
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
-CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
-AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+CapabilityBoundingSet=CAP_NET_RAW
+AmbientCapabilities=CAP_NET_RAW
 
 [Install]
 WantedBy=multi-user.target

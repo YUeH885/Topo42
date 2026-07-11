@@ -8,8 +8,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"slices"
-	"strconv"
 	"sync"
 
 	"github.com/gorilla/websocket"
@@ -21,33 +19,28 @@ import (
 var embeddedWeb embed.FS
 
 var store = topo.NewStore()
-var upgrader = websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+var upgrader websocket.Upgrader
 var sessionsMu sync.Mutex
 var sessions = map[string]*websocket.Conn{}
 var agentToken string
 
 func main() {
-	if slices.Contains(os.Args[1:], "--version") || slices.Contains(os.Args[1:], "version") {
+	if len(os.Args) == 2 && os.Args[1] == "--version" {
 		println(topo.Version)
 		return
 	}
-	host := flag.String("host", "0.0.0.0", "")
-	port := flag.Int("port", 8000, "")
+	addr := flag.String("addr", "0.0.0.0:8000", "")
 	flag.StringVar(&agentToken, "agent-token", "", "")
 	flag.Parse()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/topology", topologyHandler)
 	mux.HandleFunc("/api/agent/ws", agentWSHandler)
-	web, err := fs.Sub(embeddedWeb, "web")
-	if err != nil {
-		panic(err)
-	}
+	web, _ := fs.Sub(embeddedWeb, "web")
 	mux.Handle("/", http.FileServer(http.FS(web)))
 
-	addr := *host + ":" + strconv.Itoa(*port)
-	log.Printf("Topo42 controller starting version=%s addr=%s", topo.Version, addr)
-	log.Fatal(http.ListenAndServe(addr, mux))
+	log.Printf("Topo42 controller starting version=%s addr=%s", topo.Version, *addr)
+	log.Fatal(http.ListenAndServe(*addr, mux))
 }
 
 func topologyHandler(w http.ResponseWriter, r *http.Request) {
@@ -98,25 +91,17 @@ func agentWSHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	for {
 		var event struct {
-			Event   string          `json:"event"`
-			Payload json.RawMessage `json:"payload"`
+			Event   string             `json:"event"`
+			Payload topo.AgentSnapshot `json:"payload"`
 		}
 		if err := conn.ReadJSON(&event); err != nil {
 			log.Printf("agent disconnected node=%s", node)
 			return
 		}
-		if event.Event != "hello" && event.Event != "snapshot" {
+		if event.Event != "snapshot" {
 			continue
 		}
-		var snapshot topo.AgentSnapshot
-		if err := json.Unmarshal(event.Payload, &snapshot); err != nil {
-			continue
-		}
-		if event.Event == "hello" {
-			store.RecordAgentHello(node, snapshot)
-		} else {
-			store.RecordAgentSnapshot(node, snapshot)
-		}
+		store.RecordAgentSnapshot(node, event.Payload)
 		if err := conn.WriteJSON(map[string]any{"event": "peers", "peers": store.PeerNodeIPsFor(node)}); err != nil {
 			return
 		}

@@ -2,7 +2,7 @@ package topo
 
 import "time"
 
-const Version = "0.6.3"
+const Version = "0.7.0"
 
 const AgentOfflineAfter = 90 * time.Second
 

@@ -1,60 +1,32 @@
 package topo
 
 import (
-	"context"
 	"encoding/binary"
-	"encoding/json"
+	"net"
 	"net/netip"
-	"os/exec"
-	"regexp"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+
+	"golang.org/x/net/icmp"
+	"golang.org/x/net/ipv6"
 )
 
 const DetectionInterval = 30 * time.Second
 const dn42DummyInterface = "dn42_dummy"
+const pingCount = 10
+const pingTimeout = time.Second
 
-var pingAvgPattern = regexp.MustCompile(`=\s*[0-9.]+/([0-9.]+)/`)
-var pingLossPattern = regexp.MustCompile(`([0-9.]+)%\s*packet loss`)
+var runPing = icmpPingStats
 
-type commandResult struct {
-	stdout     string
-	returnCode int
-}
-
-var runCommand = func(command []string, timeout time.Duration) commandResult {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, command[0], command[1:]...)
-	output, err := cmd.CombinedOutput()
-	if ctx.Err() == context.DeadlineExceeded {
-		return commandResult{returnCode: 124}
-	}
-	if err == nil {
-		return commandResult{stdout: string(output), returnCode: 0}
-	}
-	if exitErr, ok := err.(*exec.ExitError); ok {
-		return commandResult{stdout: string(output), returnCode: exitErr.ExitCode()}
-	}
-	return commandResult{stdout: string(output), returnCode: 1}
-}
-
-func PeerNodeIPsFromEvent(raw []byte) (map[string][]string, bool) {
-	var event struct {
-		Event string              `json:"event"`
-		Peers map[string][]string `json:"peers"`
-	}
-	if err := json.Unmarshal(raw, &event); err != nil || event.Event != "peers" {
-		return nil, false
-	}
-	return event.Peers, true
-}
-
-func CollectDN42DummyIPs() []string {
+func (c *InterfaceCache) CollectDN42DummyIPs() []string {
 	result := []string{}
-	for _, value := range interfaceAddresses(dn42DummyInterface) {
+	c.mu.RLock()
+	addresses := append([]string(nil), c.addresses[dn42DummyInterface]...)
+	c.mu.RUnlock()
+	for _, value := range addresses {
 		if ip := nodeIP(value); ip != "" {
 			result = append(result, ip)
 		}
@@ -62,9 +34,9 @@ func CollectDN42DummyIPs() []string {
 	return dedupe(result)
 }
 
-func CollectDN42WireGuardDetection(peers map[string][]string, localNodeIPs []string) []AgentDetectedInterface {
+func (c *InterfaceCache) CollectDN42WireGuardDetection(peers map[string][]string, localNodeIPs []string) []AgentDetectedInterface {
 	detected := []AgentDetectedInterface{}
-	for _, name := range wireguardInterfaces() {
+	for _, name := range c.wireguardInterfaces() {
 		latency, loss := pingStats(name, peers[name], localNodeIPs)
 		detected = append(detected, AgentDetectedInterface{
 			Name:              name,
@@ -76,34 +48,17 @@ func CollectDN42WireGuardDetection(peers map[string][]string, localNodeIPs []str
 	return detected
 }
 
-func wireguardInterfaces() []string {
-	result := runCommand([]string{"wg", "show", "interfaces"}, 30*time.Second)
-	if result.returnCode != 0 {
-		return []string{}
-	}
+func (c *InterfaceCache) wireguardInterfaces() []string {
 	names := []string{}
-	for _, name := range strings.Fields(result.stdout) {
+	c.mu.RLock()
+	for _, name := range c.indexNames {
 		if NodePattern.MatchString(name) {
 			names = append(names, name)
 		}
 	}
+	c.mu.RUnlock()
 	sort.Strings(names)
 	return names
-}
-
-func interfaceAddresses(name string) []string {
-	result := runCommand([]string{"ip", "-o", "addr", "show", "dev", name}, 30*time.Second)
-	if result.returnCode != 0 {
-		return []string{}
-	}
-	addresses := []string{}
-	for _, line := range strings.Split(result.stdout, "\n") {
-		parts := strings.Fields(line)
-		if len(parts) >= 4 && (parts[2] == "inet" || parts[2] == "inet6") {
-			addresses = append(addresses, parts[3])
-		}
-	}
-	return addresses
 }
 
 func nodeIP(value string) string {
@@ -146,11 +101,9 @@ func dummyIPv6ToLinkLocal(value string) string {
 }
 
 func peerIPIsSmaller(localNodeIPs, peerNodeIPs []string) bool {
-	local := parseAddrs(localNodeIPs)
-	peer := parseAddrs(peerNodeIPs)
 	for _, want4 := range []bool{true, false} {
-		localIP, localOK := firstAddrVersion(local, want4)
-		peerIP, peerOK := firstAddrVersion(peer, want4)
+		localIP, localOK := firstAddrVersion(localNodeIPs, want4)
+		peerIP, peerOK := firstAddrVersion(peerNodeIPs, want4)
 		if localOK && peerOK {
 			return peerIP.Compare(localIP) < 0
 		}
@@ -167,18 +120,7 @@ func pingStats(interfaceName string, peerNodeIPs, localNodeIPs []string) (*float
 		if address == "" {
 			continue
 		}
-		result := runCommand([]string{"ping", "-c", "10", "-W", "1", "-I", interfaceName, address}, 12*time.Second)
-		var latency, loss *float64
-		if match := pingAvgPattern.FindStringSubmatch(result.stdout); len(match) == 2 {
-			if value, err := strconv.ParseFloat(match[1], 64); err == nil {
-				latency = &value
-			}
-		}
-		if match := pingLossPattern.FindStringSubmatch(result.stdout); len(match) == 2 {
-			if value, err := strconv.ParseFloat(match[1], 64); err == nil {
-				loss = &value
-			}
-		}
+		latency, loss := runPing(interfaceName, address)
 		if latency != nil || loss != nil {
 			return latency, loss
 		}
@@ -186,21 +128,74 @@ func pingStats(interfaceName string, peerNodeIPs, localNodeIPs []string) (*float
 	return nil, nil
 }
 
-func parseAddrs(values []string) []netip.Addr {
-	result := []netip.Addr{}
-	for _, value := range values {
-		addr, err := netip.ParseAddr(value)
-		if err == nil {
-			result = append(result, addr)
+func icmpPingStats(interfaceName, address string) (*float64, *float64) {
+	ip := net.ParseIP(address)
+	if ip == nil {
+		return nil, nil
+	}
+	conn, err := icmp.ListenPacket("ip6:ipv6-icmp", "::")
+	if err != nil {
+		return nil, nil
+	}
+	defer conn.Close()
+
+	id := os.Getpid() & 0xffff
+	target := &net.IPAddr{IP: ip, Zone: interfaceName}
+	buffer := make([]byte, 1500)
+	received := 0
+	total := time.Duration(0)
+	for seq := 0; seq < pingCount; seq++ {
+		message := icmp.Message{
+			Type: ipv6.ICMPTypeEchoRequest,
+			Body: &icmp.Echo{ID: id, Seq: seq, Data: []byte("topo42")},
+		}
+		raw, err := message.Marshal(nil)
+		if err != nil {
+			continue
+		}
+		start := time.Now()
+		if _, err := conn.WriteTo(raw, target); err != nil {
+			continue
+		}
+		if readICMPEchoReply(conn, buffer, id, seq, start.Add(pingTimeout)) {
+			received++
+			total += time.Since(start)
 		}
 	}
-	return result
+
+	loss := float64(pingCount-received) * 100 / pingCount
+	if received == 0 {
+		return nil, &loss
+	}
+	latency := float64(total.Microseconds()) / 1000 / float64(received)
+	return &latency, &loss
 }
 
-func firstAddrVersion(values []netip.Addr, want4 bool) (netip.Addr, bool) {
+func readICMPEchoReply(conn *icmp.PacketConn, buffer []byte, id, seq int, deadline time.Time) bool {
+	for {
+		if err := conn.SetReadDeadline(deadline); err != nil {
+			return false
+		}
+		n, _, err := conn.ReadFrom(buffer)
+		if err != nil {
+			return false
+		}
+		message, err := icmp.ParseMessage(ipv6.ICMPTypeEchoReply.Protocol(), buffer[:n])
+		if err != nil || message.Type != ipv6.ICMPTypeEchoReply {
+			continue
+		}
+		echo, ok := message.Body.(*icmp.Echo)
+		if ok && echo.ID == id && echo.Seq == seq {
+			return true
+		}
+	}
+}
+
+func firstAddrVersion(values []string, want4 bool) (netip.Addr, bool) {
 	for _, value := range values {
-		if value.Is4() == want4 {
-			return value, true
+		addr, err := netip.ParseAddr(value)
+		if err == nil && addr.Is4() == want4 {
+			return addr, true
 		}
 	}
 	return netip.Addr{}, false

@@ -5,9 +5,7 @@ const NODE_HEIGHT = 68;
 
 let topology = { nodes: [], edges: [] };
 let selectedNodeName = null;
-let loading = true;
 let error = "";
-let updatedAt = null;
 
 const root = document.getElementById("root");
 
@@ -64,14 +62,10 @@ function renderTopologyCanvas(positions) {
   if (topology.nodes.length === 0) {
     return '<div class="topologyCanvas"><div class="empty">暂无节点。Agent 连接后会显示 dn42 拓扑。</div></div>';
   }
-  const edgeParts = [...topology.edges].sort((a, b) => {
-    const aRelated = Number(selectedNodeName === a.local_node_name || selectedNodeName === a.peer_node_name);
-    const bRelated = Number(selectedNodeName === b.local_node_name || selectedNodeName === b.peer_node_name);
-    return aRelated - bRelated;
-  }).map((edge) => {
+  const edges = topology.edges.map((edge) => {
     const source = positions[edge.local_node_name];
     const target = positions[edge.peer_node_name];
-    if (!source || !target) return { line: "", label: "" };
+    if (!source || !target) return "";
     const running = edge.local_status === "running" && edge.peer_status === "running";
     const related = selectedNodeName === edge.local_node_name || selectedNodeName === edge.peer_node_name;
     const classes = `topologyEdge ${running ? "healthy" : "down"}${related ? " related" : ""}${selectedNodeName && !related ? " dimmed" : ""}`;
@@ -90,13 +84,8 @@ function renderTopologyCanvas(positions) {
         label = `<text class="topologyEdgeLabel${packetLoss > 0 ? " lossy" : ""}" x="${labelX}" y="${labelY}">${esc(labelText)}</text>`;
       }
     }
-    return {
-      line: `<g class="${classes}"><line x1="${source.x}" y1="${source.y}" x2="${target.x}" y2="${target.y}"></line></g>`,
-      label,
-    };
-  });
-  const edges = edgeParts.map((edge) => edge.line).join("");
-  const edgeLabels = edgeParts.map((edge) => edge.label).join("");
+    return `<g class="${classes}"><line x1="${source.x}" y1="${source.y}" x2="${target.x}" y2="${target.y}"></line></g>${label}`;
+  }).join("");
   const nodes = topology.nodes.map((node) => {
     const position = positions[node.name] || { x: TOPOLOGY_WIDTH / 2, y: TOPOLOGY_HEIGHT / 2 };
     const online = node.status === "online";
@@ -110,7 +99,7 @@ function renderTopologyCanvas(positions) {
     </g>`;
   }).join("");
   return `<div class="topologyCanvas">
-    <svg class="topologySvg" viewBox="0 0 ${TOPOLOGY_WIDTH} ${TOPOLOGY_HEIGHT}" role="img">${edges}${nodes}${edgeLabels}</svg>
+    <svg class="topologySvg" viewBox="0 0 ${TOPOLOGY_WIDTH} ${TOPOLOGY_HEIGHT}" role="img">${edges}${nodes}</svg>
   </div>`;
 }
 
@@ -131,7 +120,6 @@ function render() {
         <small>对端 IPv4: ${esc(ipv4 || "-")}</small>
         ${ipv6 ? `<small>对端 IPv6: ${esc(ipv6)}</small>` : ""}
         <small>RTT/丢包: ${esc(linkMetricLabel(latency, packetLoss))}</small>
-        <small>对端: ${esc(item.name)}</small>
       </div>
       <em class="statusPill ${item.runtime_status === "running" ? "healthy" : "unknown"}">${esc(statusText(item.runtime_status))}</em>
     </article>`;
@@ -143,15 +131,10 @@ function render() {
         <div class="statCard"><span>节点</span><strong>${onlineCount}/${nodes.length}</strong><small>在线</small></div>
         <div class="statCard"><span>接口</span><strong>${selectedInterfaces.length}</strong><small>${esc(selectedNode?.name || "当前节点")}</small></div>
         <div class="statCard"><span>链路</span><strong>${runningEdgeCount}/${topology.edges.length}</strong><small>已连接</small></div>
-        <div class="statCard"><span>刷新</span><strong>${loading ? "..." : esc(formatDate(updatedAt))}</strong><small>每 5 秒自动刷新</small></div>
       </div>
       <section class="topologyPanel">
         <div class="topologyHeader">
           <h2>网络拓扑</h2>
-          <div class="topologyToolbar">
-            <span class="topologyMeta">${topology.nodes.length} 节点 / ${topology.edges.length} 链路</span>
-            <button class="iconButton" id="refreshButton" title="刷新">刷新</button>
-          </div>
         </div>
         ${renderTopologyCanvas(positions)}
       </section>
@@ -182,11 +165,9 @@ async function refreshAll() {
     if (selectedNodeName != null && !topology.nodes.some((node) => node.name === selectedNodeName)) {
       selectedNodeName = null;
     }
-    updatedAt = new Date();
   } catch (err) {
     error = err instanceof Error ? err.message : String(err);
   } finally {
-    loading = false;
     render();
   }
 }
@@ -203,10 +184,6 @@ root.addEventListener("click", (event) => {
   if (target.closest(".topologySvg")) {
     selectedNodeName = null;
     render();
-    return;
-  }
-  if (target.closest("#refreshButton")) {
-    void refreshAll();
   }
 });
 

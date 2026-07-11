@@ -29,34 +29,6 @@ body {
   background: var(--bg);
 }
 
-.iconButton {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 36px;
-  border: 1px solid var(--border-strong);
-  border-radius: 6px;
-  background: var(--surface);
-  color: var(--muted);
-  padding: 8px 12px;
-  font: inherit;
-  line-height: 1.2;
-  cursor: pointer;
-}
-
-.iconButton:hover {
-  background: var(--surface-soft);
-  border-color: var(--border-strong);
-}
-
-.topologyToolbar {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
 .nodeBoard {
   display: grid;
   gap: 10px;
@@ -145,19 +117,6 @@ body {
   margin: 0;
   color: var(--strong);
   font-size: 14px;
-}
-
-.topologyMeta {
-  display: inline-flex;
-  align-items: center;
-  min-height: 30px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--surface-muted);
-  color: var(--muted);
-  padding: 4px 10px;
-  font-size: 12px;
-  white-space: nowrap;
 }
 
 .topologyCanvas {
@@ -365,10 +324,6 @@ body {
 
   .topologyHeader {
     display: grid;
-  }
-
-  .topologyToolbar {
-    justify-content: flex-start;
   }
 
   .topologyCanvas {

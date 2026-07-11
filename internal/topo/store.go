@@ -42,17 +42,6 @@ func (s *Store) SetActive(name string, active bool) {
 	delete(s.active, name)
 }
 
-func (s *Store) RecordAgentHello(name string, snapshot AgentSnapshot) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	node := s.ensureNodeLocked(name)
-	if snapshot.AgentVersion != "" {
-		node.AgentVersion = snapshot.AgentVersion
-	}
-	node.NodeIPs = dedupe(snapshot.NodeIPs)
-	node.LastSeenAt = time.Now().UTC()
-}
-
 func (s *Store) RecordAgentSnapshot(name string, snapshot AgentSnapshot) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -172,11 +161,15 @@ func (s *Store) Topology() TopologyRead {
 			value := node.LastSeenAt
 			lastSeen = &value
 		}
+		status := "offline"
+		if s.active[node.Name] && !node.LastSeenAt.IsZero() && now.Sub(node.LastSeenAt) <= AgentOfflineAfter {
+			status = "online"
+		}
 		readNodes = append(readNodes, NodeRead{
 			Name:         node.Name,
 			NodeIPs:      append([]string(nil), node.NodeIPs...),
 			AgentVersion: version,
-			Status:       s.nodeStatusLocked(node, now),
+			Status:       status,
 			LastSeenAt:   lastSeen,
 			Interfaces:   ifaces,
 		})
@@ -191,16 +184,6 @@ func (s *Store) ensureNodeLocked(name string) *runtimeNode {
 		s.nodes[name] = node
 	}
 	return node
-}
-
-func (s *Store) nodeStatusLocked(node *runtimeNode, now time.Time) string {
-	if !s.active[node.Name] || node.LastSeenAt.IsZero() {
-		return "offline"
-	}
-	if now.Sub(node.LastSeenAt) <= AgentOfflineAfter {
-		return "online"
-	}
-	return "offline"
 }
 
 func nodeLess(a, b *runtimeNode) bool {

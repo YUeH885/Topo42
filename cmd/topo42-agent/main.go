@@ -5,8 +5,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"slices"
-	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -15,7 +13,7 @@ import (
 )
 
 func main() {
-	if slices.Contains(os.Args[1:], "--version") || slices.Contains(os.Args[1:], "version") {
+	if len(os.Args) == 2 && os.Args[1] == "--version" {
 		println(topo.Version)
 		return
 	}
@@ -30,20 +28,30 @@ func main() {
 	if !topo.NodePattern.MatchString(nodeName) {
 		log.Fatal("node_name must match dn42_xxxx, for example dn42_us02")
 	}
+	interfaces := topo.NewInterfaceCache()
+	go func() {
+		if err := interfaces.WatchNetlink(); err != nil {
+			log.Printf("netlink listener stopped: %v", err)
+		}
+	}()
 	for {
-		if err := runWebSocketClient(serverURL, nodeName, token); err != nil {
+		if err := runWebSocketClient(serverURL, nodeName, token, interfaces); err != nil {
 			log.Printf("controller websocket failed, retrying: %v", err)
 			time.Sleep(topo.DetectionInterval)
 		}
 	}
 }
 
-func runWebSocketClient(serverURL, nodeName, token string) error {
+func runWebSocketClient(serverURL, nodeName, token string, interfaces *topo.InterfaceCache) error {
 	header := http.Header{}
 	if token != "" {
 		header.Set("Authorization", "Bearer "+token)
 	}
-	conn, _, err := (&websocket.Dialer{Proxy: nil}).Dial(controllerWSURL(serverURL, nodeName), header)
+	wsURL, err := url.JoinPath(serverURL, "api/agent/ws")
+	if err != nil {
+		return err
+	}
+	conn, _, err := (&websocket.Dialer{Proxy: nil}).Dial(wsURL+"?node="+url.QueryEscape(nodeName), header)
 	if err != nil {
 		return err
 	}
@@ -53,10 +61,7 @@ func runWebSocketClient(serverURL, nodeName, token string) error {
 	peerUpdates := make(chan map[string][]string, 1)
 	readErr := make(chan error, 1)
 	go readPeerUpdates(conn, peerUpdates, readErr)
-	if err := conn.WriteJSON(map[string]any{"event": "hello", "payload": topo.AgentSnapshot{AgentVersion: topo.Version, NodeIPs: topo.CollectDN42DummyIPs()}}); err != nil {
-		return err
-	}
-	timer := time.NewTimer(time.Second)
+	timer := time.NewTimer(0)
 	defer timer.Stop()
 	for {
 		select {
@@ -67,11 +72,11 @@ func runWebSocketClient(serverURL, nodeName, token string) error {
 			continue
 		case <-timer.C:
 		}
-		nodeIPs := topo.CollectDN42DummyIPs()
+		nodeIPs := interfaces.CollectDN42DummyIPs()
 		snapshot := topo.AgentSnapshot{
 			AgentVersion: topo.Version,
 			NodeIPs:      nodeIPs,
-			Interfaces:   topo.CollectDN42WireGuardDetection(peers, nodeIPs),
+			Interfaces:   interfaces.CollectDN42WireGuardDetection(peers, nodeIPs),
 		}
 		if err := conn.WriteJSON(map[string]any{"event": "snapshot", "payload": snapshot}); err != nil {
 			return err
@@ -80,32 +85,22 @@ func runWebSocketClient(serverURL, nodeName, token string) error {
 	}
 }
 
-func controllerWSURL(serverURL, nodeName string) string {
-	base := strings.TrimRight(serverURL, "/")
-	switch {
-	case strings.HasPrefix(base, "http://"):
-		base = "ws://" + strings.TrimPrefix(base, "http://")
-	case strings.HasPrefix(base, "https://"):
-		base = "wss://" + strings.TrimPrefix(base, "https://")
-	case !strings.HasPrefix(base, "ws://") && !strings.HasPrefix(base, "wss://"):
-		base = "ws://" + base
-	}
-	return base + "/api/agent/ws?node=" + url.QueryEscape(nodeName)
-}
-
 func readPeerUpdates(conn *websocket.Conn, peerUpdates chan<- map[string][]string, readErr chan<- error) {
 	for {
-		_, message, err := conn.ReadMessage()
-		if err != nil {
+		var event struct {
+			Event string              `json:"event"`
+			Peers map[string][]string `json:"peers"`
+		}
+		if err := conn.ReadJSON(&event); err != nil {
 			readErr <- err
 			return
 		}
-		next, ok := topo.PeerNodeIPsFromEvent(message)
-		if ok {
-			select {
-			case peerUpdates <- next:
-			default:
-			}
+		if event.Event != "peers" {
+			continue
+		}
+		select {
+		case peerUpdates <- event.Peers:
+		default:
 		}
 	}
 }

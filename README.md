@@ -12,9 +12,9 @@ dn42_de01
 
 格式是 `dn42_` + 两位小写字母 + 两位数字。接口名就是对端节点名。
 
-## Ping 探测
+## ICMP 探测
 
-Controller 把已知节点的 `dn42_dummy` IP 发给 Agent。Agent 只在“对端 dummy IP 小于本机 dummy IP”时发起探测，避免两端同时 ping。
+Controller 把已知节点的 `dn42_dummy` IP 发给 Agent。Agent 只在“对端 dummy IP 小于本机 dummy IP”时发起探测，避免两端同时探测。
 
 探测目标使用对端 dummy IPv6 派生出的链路本地地址：
 
@@ -22,13 +22,9 @@ Controller 把已知节点的 `dn42_dummy` IP 发给 Agent。Agent 只在“对�
 fd6a:93d4:3358::35 -> fe80::93d4:3358:35
 ```
 
-执行方式：
+Agent 直接发送 ICMPv6 Echo，统计 10 次探测的平均 RTT 和丢包率。
 
-```bash
-ping -c 10 -W 1 -I <对端接口名> <对端 fe80 地址>
-```
-
-Controller 设置 `--agent-token` 后，Agent 第三个参数必须传同一个 token。
+Agent 的 Controller 地址传 `ws://` 或 `wss://`。Controller 设置 `--agent-token` 后，Agent 第三个参数必须传同一个 token。
 
 ## 构建
 

@@ -50,7 +50,7 @@ func TestTopologySortsNodesByIP(t *testing.T) {
 	store := NewStore()
 	store.RecordAgentSnapshot("dn42_us10", AgentSnapshot{NodeIPs: []string{"172.23.70.10"}})
 	store.RecordAgentSnapshot("dn42_cn02", AgentSnapshot{NodeIPs: []string{"172.23.70.2"}})
-	store.RecordAgentHello("dn42_zz99", AgentSnapshot{})
+	store.RecordAgentSnapshot("dn42_zz99", AgentSnapshot{})
 
 	topology := store.Topology()
 

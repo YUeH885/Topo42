@@ -19,7 +19,6 @@ import (
 var embeddedWeb embed.FS
 
 var store = topo.NewStore()
-var upgrader websocket.Upgrader
 var sessionsMu sync.Mutex
 var sessions = map[string]*websocket.Conn{}
 var agentToken string
@@ -34,20 +33,16 @@ func main() {
 	flag.Parse()
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/topology", topologyHandler)
-	mux.HandleFunc("/api/agent/ws", agentWSHandler)
+	mux.HandleFunc("GET /api/topology", topologyHandler)
+	mux.HandleFunc("GET /api/agent/ws", agentWSHandler)
 	web, _ := fs.Sub(embeddedWeb, "web")
-	mux.Handle("/", http.FileServer(http.FS(web)))
+	mux.Handle("GET /", http.FileServer(http.FS(web)))
 
 	log.Printf("Topo42 controller starting version=%s addr=%s", topo.Version, *addr)
 	log.Fatal(http.ListenAndServe(*addr, mux))
 }
 
 func topologyHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(store.Topology()); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -64,7 +59,7 @@ func agentWSHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid token", http.StatusForbidden)
 		return
 	}
-	conn, err := upgrader.Upgrade(w, r, nil)
+	conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
 	if err != nil {
 		return
 	}
@@ -86,23 +81,17 @@ func agentWSHandler(w http.ResponseWriter, r *http.Request) {
 		_ = conn.Close()
 	}()
 	log.Printf("agent connected node=%s", node)
-	if err := conn.WriteJSON(map[string]any{"event": "peers", "peers": store.PeerNodeIPsFor(node)}); err != nil {
+	if err := conn.WriteJSON(store.PeerNodeIPsFor(node)); err != nil {
 		return
 	}
 	for {
-		var event struct {
-			Event   string             `json:"event"`
-			Payload topo.AgentSnapshot `json:"payload"`
-		}
-		if err := conn.ReadJSON(&event); err != nil {
+		var snapshot topo.AgentSnapshot
+		if err := conn.ReadJSON(&snapshot); err != nil {
 			log.Printf("agent disconnected node=%s", node)
 			return
 		}
-		if event.Event != "snapshot" {
-			continue
-		}
-		store.RecordAgentSnapshot(node, event.Payload)
-		if err := conn.WriteJSON(map[string]any{"event": "peers", "peers": store.PeerNodeIPsFor(node)}); err != nil {
+		store.RecordAgentSnapshot(node, snapshot)
+		if err := conn.WriteJSON(store.PeerNodeIPsFor(node)); err != nil {
 			return
 		}
 	}

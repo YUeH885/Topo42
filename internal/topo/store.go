@@ -14,55 +14,37 @@ type runtimeNode struct {
 	Name         string
 	NodeIPs      []string
 	AgentVersion string
-	LastSeenAt   time.Time
+	LastSeenAt   *time.Time
 	Interfaces   map[string]InterfaceRead
+	Active       bool
 }
 
 type Store struct {
-	mu     sync.Mutex
-	nodes  map[string]*runtimeNode
-	active map[string]bool
+	mu    sync.Mutex
+	nodes map[string]*runtimeNode
 }
 
 func NewStore() *Store {
-	return &Store{
-		nodes:  map[string]*runtimeNode{},
-		active: map[string]bool{},
-	}
+	return &Store{nodes: map[string]*runtimeNode{}}
 }
 
 func (s *Store) SetActive(name string, active bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.ensureNodeLocked(name)
-	if active {
-		s.active[name] = true
-		return
-	}
-	delete(s.active, name)
+	s.ensureNodeLocked(name).Active = active
 }
 
 func (s *Store) RecordAgentSnapshot(name string, snapshot AgentSnapshot) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	node := s.ensureNodeLocked(name)
-	if snapshot.AgentVersion != "" {
-		node.AgentVersion = snapshot.AgentVersion
-	}
+	node.AgentVersion = snapshot.AgentVersion
 	node.NodeIPs = dedupe(snapshot.NodeIPs)
-	node.LastSeenAt = time.Now().UTC()
+	now := time.Now().UTC()
+	node.LastSeenAt = &now
 	node.Interfaces = map[string]InterfaceRead{}
 	for _, item := range snapshot.Interfaces {
-		status := item.RuntimeStatus
-		if status == "" {
-			status = "unknown"
-		}
-		node.Interfaces[item.Name] = InterfaceRead{
-			Name:              item.Name,
-			RuntimeStatus:     status,
-			LatencyMS:         item.LatencyMS,
-			PacketLossPercent: item.PacketLossPercent,
-		}
+		node.Interfaces[item.Name] = item
 	}
 }
 
@@ -91,86 +73,48 @@ func (s *Store) Topology() TopologyRead {
 
 	edges := []TopologyEdge{}
 	seenPairs := map[[2]string]bool{}
-	for _, local := range nodes {
-		names := make([]string, 0, len(local.Interfaces))
-		for name := range local.Interfaces {
-			names = append(names, name)
-		}
-		sort.Strings(names)
-		for _, name := range names {
-			iface := local.Interfaces[name]
-			peer := s.nodes[iface.Name]
-			if peer == nil || peer.Name == local.Name {
-				continue
-			}
-			pair := sortedPair(local.Name, peer.Name)
-			if seenPairs[pair] {
-				continue
-			}
-			seenPairs[pair] = true
-			peerIface, ok := peer.Interfaces[local.Name]
-			peerName := local.Name
-			peerStatus := "unknown"
-			var peerLatency, peerLoss *float64
-			if ok {
-				peerName = peerIface.Name
-				peerStatus = peerIface.RuntimeStatus
-				peerLatency = peerIface.LatencyMS
-				peerLoss = peerIface.PacketLossPercent
-			}
-			edges = append(edges, TopologyEdge{
-				ID:                     "wg-" + pair[0] + "-" + pair[1],
-				LocalNodeName:          local.Name,
-				PeerNodeName:           peer.Name,
-				LocalInterfaceName:     iface.Name,
-				PeerInterfaceName:      peerName,
-				LocalStatus:            iface.RuntimeStatus,
-				PeerStatus:             peerStatus,
-				LocalLatencyMS:         iface.LatencyMS,
-				PeerLatencyMS:          peerLatency,
-				LocalPacketLossPercent: iface.PacketLossPercent,
-				PeerPacketLossPercent:  peerLoss,
-			})
-		}
-	}
-
 	readNodes := make([]NodeRead, 0, len(nodes))
 	for _, node := range nodes {
-		ifaces := make([]InterfaceRead, 0, len(node.Interfaces))
 		names := make([]string, 0, len(node.Interfaces))
 		for name := range node.Interfaces {
 			names = append(names, name)
 		}
 		sort.Strings(names)
+		ifaces := make([]InterfaceRead, 0, len(node.Interfaces))
 		for _, name := range names {
 			iface := node.Interfaces[name]
-			if peer := s.nodes[iface.Name]; peer != nil {
-				iface.PeerNodeIPs = append([]string(nil), peer.NodeIPs...)
-			} else {
-				iface.PeerNodeIPs = []string{}
-			}
 			ifaces = append(ifaces, iface)
-		}
-		var version *string
-		if node.AgentVersion != "" {
-			value := node.AgentVersion
-			version = &value
-		}
-		var lastSeen *time.Time
-		if !node.LastSeenAt.IsZero() {
-			value := node.LastSeenAt
-			lastSeen = &value
-		}
-		status := "offline"
-		if s.active[node.Name] && !node.LastSeenAt.IsZero() && now.Sub(node.LastSeenAt) <= AgentOfflineAfter {
-			status = "online"
+			peer := s.nodes[iface.Name]
+			if peer == nil || peer.Name == node.Name {
+				continue
+			}
+			pair := [2]string{min(node.Name, peer.Name), max(node.Name, peer.Name)}
+			if seenPairs[pair] {
+				continue
+			}
+			seenPairs[pair] = true
+			peerIface, ok := peer.Interfaces[node.Name]
+			latency, loss := iface.LatencyMS, iface.PacketLossPercent
+			if latency == nil {
+				latency = peerIface.LatencyMS
+			}
+			if loss == nil {
+				loss = peerIface.PacketLossPercent
+			}
+			edges = append(edges, TopologyEdge{
+				LocalNodeName:     node.Name,
+				PeerNodeName:      peer.Name,
+				Connected:         ok && (loss == nil || *loss != 100),
+				LatencyMS:         latency,
+				PacketLossPercent: loss,
+			})
 		}
 		readNodes = append(readNodes, NodeRead{
 			Name:         node.Name,
 			NodeIPs:      append([]string(nil), node.NodeIPs...),
-			AgentVersion: version,
-			Status:       status,
-			LastSeenAt:   lastSeen,
+			AgentVersion: node.AgentVersion,
+			Online:       node.Active && node.LastSeenAt != nil && now.Sub(*node.LastSeenAt) <= AgentOfflineAfter,
+			LastSeenAt:   node.LastSeenAt,
 			Interfaces:   ifaces,
 		})
 	}
@@ -211,13 +155,6 @@ func firstNodeAddr(values []string) (netip.Addr, bool) {
 		}
 	}
 	return netip.Addr{}, false
-}
-
-func sortedPair(a, b string) [2]string {
-	if a < b {
-		return [2]string{a, b}
-	}
-	return [2]string{b, a}
 }
 
 func dedupe(values []string) []string {

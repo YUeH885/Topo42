@@ -88,7 +88,6 @@ body {
   padding: 16px;
 }
 
-.topologyHeader,
 .snapshotHeader {
   display: flex;
   align-items: flex-start;
@@ -96,11 +95,8 @@ body {
   gap: 12px;
 }
 
-.topologyHeader h2,
+.topologyPanel h2,
 .detailPanel h2 {
-  display: flex;
-  align-items: center;
-  gap: 8px;
   margin: 0;
   color: var(--strong);
   font-size: 18px;
@@ -230,8 +226,7 @@ body {
   color: var(--strong);
 }
 
-.statusRow small,
-.nodeSnapshot small {
+.statusRow small {
   overflow: hidden;
   color: var(--muted);
   font-size: 12px;
@@ -320,10 +315,6 @@ body {
 
   .infoGrid {
     grid-template-columns: 1fr;
-  }
-
-  .topologyHeader {
-    display: grid;
   }
 
   .topologyCanvas {

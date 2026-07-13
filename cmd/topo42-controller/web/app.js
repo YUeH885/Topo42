@@ -9,30 +9,10 @@ let error = "";
 
 const root = document.getElementById("root");
 
-function formatDate(value) {
-  return value ? new Date(value).toLocaleString() : "-";
-}
-
 function linkMetricLabel(latency, packetLoss) {
   const latencyText = latency == null ? "-" : `${latency < 10 ? latency.toFixed(1) : Math.round(latency)} ms`;
   const lossText = packetLoss == null ? "-" : `${packetLoss < 10 ? packetLoss.toFixed(1) : Math.round(packetLoss)}%`;
   return `${latencyText} / ${lossText}`;
-}
-
-function statusText(status) {
-  return { running: "已连接", online: "在线", offline: "离线" }[status] || "未知";
-}
-
-function interfaceLinkMetrics(nodeName, item) {
-  const edge = topology.edges.find((edge) => (
-    (edge.local_node_name === nodeName && edge.local_interface_name === item.name) ||
-    (edge.peer_node_name === nodeName && edge.peer_interface_name === item.name)
-  ));
-  if (!edge) return [item.latency_ms, item.packet_loss_percent];
-  if (edge.local_node_name === nodeName) {
-    return [item.latency_ms ?? edge.peer_latency_ms, item.packet_loss_percent ?? edge.peer_packet_loss_percent];
-  }
-  return [item.latency_ms ?? edge.local_latency_ms, item.packet_loss_percent ?? edge.local_packet_loss_percent];
 }
 
 function esc(value) {
@@ -66,13 +46,12 @@ function renderTopologyCanvas(positions) {
     const source = positions[edge.local_node_name];
     const target = positions[edge.peer_node_name];
     if (!source || !target) return "";
-    const running = edge.local_status === "running" && edge.peer_status === "running";
+    const packetLoss = edge.packet_loss_percent;
     const related = selectedNodeName === edge.local_node_name || selectedNodeName === edge.peer_node_name;
-    const classes = `topologyEdge ${running ? "healthy" : "down"}${related ? " related" : ""}${selectedNodeName && !related ? " dimmed" : ""}`;
+    const classes = `topologyEdge ${edge.connected ? "healthy" : "down"}${related ? " related" : ""}${selectedNodeName && !related ? " dimmed" : ""}`;
     let label = "";
     if (related) {
-      const packetLoss = edge.local_packet_loss_percent ?? edge.peer_packet_loss_percent;
-      const labelText = linkMetricLabel(edge.local_latency_ms ?? edge.peer_latency_ms, packetLoss);
+      const labelText = linkMetricLabel(edge.latency_ms, packetLoss);
       if (labelText !== "- / -") {
         const labelAnchor = selectedNodeName === edge.local_node_name ? source : target;
         const labelPeer = selectedNodeName === edge.local_node_name ? target : source;
@@ -88,8 +67,7 @@ function renderTopologyCanvas(positions) {
   }).join("");
   const nodes = topology.nodes.map((node) => {
     const position = positions[node.name] || { x: TOPOLOGY_WIDTH / 2, y: TOPOLOGY_HEIGHT / 2 };
-    const online = node.status === "online";
-    return `<g class="topologyNode${online ? " online" : ""}${node.name === selectedNodeName ? " selected" : ""}" data-node="${esc(node.name)}" transform="translate(${position.x - NODE_WIDTH / 2} ${position.y - NODE_HEIGHT / 2})">
+    return `<g class="topologyNode${node.online ? " online" : ""}${node.name === selectedNodeName ? " selected" : ""}" data-node="${esc(node.name)}" transform="translate(${position.x - NODE_WIDTH / 2} ${position.y - NODE_HEIGHT / 2})">
       <rect width="${NODE_WIDTH}" height="${NODE_HEIGHT}" rx="8"></rect>
       <rect class="nodeAccent" width="4" height="${NODE_HEIGHT}" rx="2"></rect>
       <text class="nodeTitle" x="12" y="20">${esc(node.name)}</text>
@@ -107,21 +85,25 @@ function render() {
   const nodes = topology.nodes;
   const selectedNode = nodes.find((node) => node.name === selectedNodeName) || null;
   const selectedInterfaces = selectedNode?.interfaces || [];
-  const onlineCount = nodes.filter((node) => node.status === "online").length;
-  const runningEdgeCount = topology.edges.filter((edge) => edge.local_status === "running" && edge.peer_status === "running").length;
-  const positions = nodePositions(nodes);
+  const onlineCount = nodes.filter((node) => node.online).length;
+  const runningEdgeCount = topology.edges.filter((edge) => edge.connected).length;
+  // ponytail: linear lookups suit this small topology; index nodes and edges if it grows.
   const interfaces = selectedInterfaces.map((item) => {
-    const ipv4 = item.peer_node_ips.filter((ip) => ip.includes(".")).join(", ");
-    const ipv6 = item.peer_node_ips.filter((ip) => ip.includes(":")).join(", ");
-    const [latency, packetLoss] = interfaceLinkMetrics(selectedNode.name, item);
+    const peerNodeIPs = nodes.find((node) => node.name === item.name)?.node_ips || [];
+    const ipv4 = peerNodeIPs.filter((ip) => ip.includes(".")).join(", ");
+    const ipv6 = peerNodeIPs.filter((ip) => ip.includes(":")).join(", ");
+    const edge = topology.edges.find((edge) => (
+      (edge.local_node_name === selectedNode.name && edge.peer_node_name === item.name) ||
+      (edge.peer_node_name === selectedNode.name && edge.local_node_name === item.name)
+    ));
     return `<article class="statusRow">
       <div>
         <strong>${esc(item.name)}</strong>
         <small>对端 IPv4: ${esc(ipv4 || "-")}</small>
         ${ipv6 ? `<small>对端 IPv6: ${esc(ipv6)}</small>` : ""}
-        <small>RTT/丢包: ${esc(linkMetricLabel(latency, packetLoss))}</small>
+        <small>RTT/丢包: ${esc(linkMetricLabel(edge?.latency_ms ?? item.latency_ms, edge?.packet_loss_percent ?? item.packet_loss_percent))}</small>
       </div>
-      <em class="statusPill ${item.runtime_status === "running" ? "healthy" : "unknown"}">${esc(statusText(item.runtime_status))}</em>
+      <em class="statusPill ${edge?.connected ? "healthy" : "unknown"}">${edge?.connected ? "已连接" : "离线"}</em>
     </article>`;
   }).join("");
 
@@ -133,18 +115,16 @@ function render() {
         <div class="statCard"><span>链路</span><strong>${runningEdgeCount}/${topology.edges.length}</strong><small>已连接</small></div>
       </div>
       <section class="topologyPanel">
-        <div class="topologyHeader">
-          <h2>网络拓扑</h2>
-        </div>
-        ${renderTopologyCanvas(positions)}
+        <h2>网络拓扑</h2>
+        ${renderTopologyCanvas(nodePositions(nodes))}
       </section>
       <section class="detailPanel">
         <h2>连接状态</h2>
         ${selectedNode ? `<div class="nodeSnapshot">
-          <div class="snapshotHeader"><div><strong>${esc(selectedNode.name)}</strong></div><em class="statusPill ${selectedNode.status === "online" ? "healthy" : "unknown"}">${esc(statusText(selectedNode.status))}</em></div>
+          <div class="snapshotHeader"><div><strong>${esc(selectedNode.name)}</strong></div><em class="statusPill ${selectedNode.online ? "healthy" : "unknown"}">${selectedNode.online ? "在线" : "离线"}</em></div>
           <dl class="infoGrid">
             <div><dt>Agent</dt><dd>${esc(selectedNode.agent_version || "-")}</dd></div>
-            <div><dt>最后心跳</dt><dd>${esc(formatDate(selectedNode.last_seen_at))}</dd></div>
+            <div><dt>最后心跳</dt><dd>${esc(selectedNode.last_seen_at ? new Date(selectedNode.last_seen_at).toLocaleString() : "-")}</dd></div>
             <div><dt>节点 IP</dt><dd>${esc(selectedNode.node_ips.join(", ") || "-")}</dd></div>
           </dl>
         </div>` : '<div class="empty">在网络拓扑中选择一个节点查看状态。</div>'}

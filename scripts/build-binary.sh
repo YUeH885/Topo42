@@ -4,27 +4,13 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TARGET="${1:?usage: scripts/build-binary.sh agent|controller}"
 
-if ! command -v go >/dev/null 2>&1; then
-  echo "Go is required. Install Go 1.22+ first." >&2
+if [[ "$TARGET" != agent && "$TARGET" != controller ]]; then
+  echo "usage: scripts/build-binary.sh agent|controller" >&2
   exit 1
 fi
-
-case "$TARGET" in
-  agent)
-    OUT_DIR="$ROOT_DIR/dist/agent"
-    NAME="topo42-agent-linux-x64"
-    PACKAGE="./cmd/topo42-agent"
-    ;;
-  controller)
-    OUT_DIR="$ROOT_DIR/dist/controller"
-    NAME="topo42-controller-linux-x64"
-    PACKAGE="./cmd/topo42-controller"
-    ;;
-  *)
-    echo "usage: scripts/build-binary.sh agent|controller" >&2
-    exit 1
-    ;;
-esac
+OUT_DIR="$ROOT_DIR/dist/$TARGET"
+NAME="topo42-$TARGET-linux-x64"
+PACKAGE="./cmd/topo42-$TARGET"
 
 mkdir -p "$OUT_DIR"
 cd "$ROOT_DIR"

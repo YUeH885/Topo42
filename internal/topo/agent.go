@@ -5,7 +5,6 @@ import (
 	"net"
 	"net/netip"
 	"os"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -21,59 +20,44 @@ const pingTimeout = time.Second
 
 var runPing = icmpPingStats
 
-func (c *InterfaceCache) CollectDN42DummyIPs() []string {
-	result := []string{}
-	c.mu.RLock()
-	addresses := append([]string(nil), c.addresses[dn42DummyInterface]...)
-	c.mu.RUnlock()
-	for _, value := range addresses {
-		if ip := nodeIP(value); ip != "" {
-			result = append(result, ip)
+func CollectDN42Detection(peers map[string][]string) ([]string, []InterfaceRead) {
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		return []string{}, []InterfaceRead{}
+	}
+	nodeIPs := []string{}
+	names := []string{}
+	for _, item := range interfaces {
+		if item.Name == dn42DummyInterface {
+			addresses, _ := item.Addrs()
+			for _, address := range addresses {
+				if ip := nodeIP(address.String()); ip != "" {
+					nodeIPs = append(nodeIPs, ip)
+				}
+			}
+		}
+		if NodePattern.MatchString(item.Name) {
+			names = append(names, item.Name)
 		}
 	}
-	return dedupe(result)
-}
-
-func (c *InterfaceCache) CollectDN42WireGuardDetection(peers map[string][]string, localNodeIPs []string) []AgentDetectedInterface {
-	detected := []AgentDetectedInterface{}
-	for _, name := range c.wireguardInterfaces() {
-		latency, loss := pingStats(name, peers[name], localNodeIPs)
-		detected = append(detected, AgentDetectedInterface{
+	detected := []InterfaceRead{}
+	for _, name := range names {
+		latency, loss := pingStats(name, peers[name], nodeIPs)
+		detected = append(detected, InterfaceRead{
 			Name:              name,
-			RuntimeStatus:     "running",
 			LatencyMS:         latency,
 			PacketLossPercent: loss,
 		})
 	}
-	return detected
-}
-
-func (c *InterfaceCache) wireguardInterfaces() []string {
-	names := []string{}
-	c.mu.RLock()
-	for _, name := range c.indexNames {
-		if NodePattern.MatchString(name) {
-			names = append(names, name)
-		}
-	}
-	c.mu.RUnlock()
-	sort.Strings(names)
-	return names
+	return nodeIPs, detected
 }
 
 func nodeIP(value string) string {
 	prefix, err := netip.ParsePrefix(value)
 	if err != nil {
-		addr, parseErr := netip.ParseAddr(value)
-		if parseErr != nil {
-			return ""
-		}
-		return filterNodeAddr(addr)
+		return ""
 	}
-	return filterNodeAddr(prefix.Addr())
-}
-
-func filterNodeAddr(addr netip.Addr) string {
+	addr := prefix.Addr()
 	text := addr.String()
 	if addr.IsLinkLocalUnicast() || strings.HasSuffix(text, ".42") || strings.HasSuffix(text, ":42") {
 		return ""

@@ -128,7 +128,7 @@ function renderTopologyCanvas(positions) {
 function render() {
   const nodes = topology.nodes;
   const selectedNode = nodes.find((node) => node.name === selectedNodeName) || null;
-  const selectedInterfaces = selectedNode?.interfaces || [];
+  const selectedInterfaces = selectedNode?.interfaces.filter((item) => item.peer_node_name) || [];
   const onlineCount = nodes.filter((node) => node.online).length;
   const runningEdgeCount = topology.edges.filter((edge) => edge.connected).length;
   // ponytail: linear lookups suit this small topology; index nodes and edges if it grows.
@@ -177,7 +177,7 @@ function render() {
         </div>` : '<div class="empty">在网络拓扑中选择一个节点查看状态。</div>'}
         <div class="sectionBlock">
           <h3>接口</h3>
-          <div class="statusList">${interfaces}${selectedNode && selectedInterfaces.length === 0 ? '<div class="empty">当前节点未检测到 Babel 接口。</div>' : ""}</div>
+          <div class="statusList">${interfaces}${selectedNode && selectedInterfaces.length === 0 ? '<div class="empty">当前节点没有匹配对端的接口。</div>' : ""}</div>
         </div>
       </section>
     </section>`;

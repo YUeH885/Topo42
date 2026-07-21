@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"fmt"
 	"net"
-	"slices"
 	"testing"
 )
 
@@ -71,24 +70,5 @@ func TestBabelDetection(t *testing.T) {
 	}
 	if loss := babelHelloLoss("f000", "0000"); loss == nil || *loss != 0 {
 		t.Fatalf("startup loss = %#v", loss)
-	}
-}
-
-func TestNodeIPFiltering(t *testing.T) {
-	values := []string{
-		"172.23.70.36/32",
-		"172.23.70.42/32",
-		"fd6a:93d4:3358::42/128",
-		"fd6a:93d4:3358::36/128",
-		"fe80::606b:1cff:fe0f:65ab/64",
-	}
-	ips := []string{}
-	for _, value := range values {
-		if ip := nodeIP(value); ip != "" {
-			ips = append(ips, ip)
-		}
-	}
-	if !slices.Equal(ips, []string{"172.23.70.36", "fd6a:93d4:3358::36"}) {
-		t.Fatalf("ips = %#v", ips)
 	}
 }

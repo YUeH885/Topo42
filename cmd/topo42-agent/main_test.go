@@ -14,7 +14,9 @@ import (
 func TestWebSocketSnapshotExchange(t *testing.T) {
 	originalCollectDetection := collectDetection
 	defer func() { collectDetection = originalCollectDetection }()
-	collectDetection = func(string) ([]string, []topo.InterfaceRead, error) {
+	var detectedInterface string
+	collectDetection = func(_, dummyInterface string) ([]string, []topo.InterfaceRead, error) {
+		detectedInterface = dummyInterface
 		return []string{"172.23.70.1"}, []topo.InterfaceRead{}, nil
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -36,7 +38,10 @@ func TestWebSocketSnapshotExchange(t *testing.T) {
 	defer server.Close()
 
 	serverURL := "ws" + strings.TrimPrefix(server.URL, "http")
-	if err := runWebSocketClient(serverURL, "dn42_us01", "", "127.0.0.1:33123", 0); err == nil {
+	if err := runWebSocketClient(serverURL, "dn42_us01", "", "127.0.0.1:33123", "node0", 0); err == nil {
 		t.Fatal("expected disconnect error")
+	}
+	if detectedInterface != "node0" {
+		t.Fatalf("dummy interface = %q", detectedInterface)
 	}
 }

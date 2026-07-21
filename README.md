@@ -1,6 +1,6 @@
 # Topo42
 
-dn42 Babel 拓扑面板。Controller 提供 Web UI，Agent 上报本机 `dn42_dummy` IP，以及从 `babeld` 读取的接口和链路指标。
+dn42 Babel 拓扑面板。Controller 提供 Web UI，Agent 上报指定接口的全部 IP，以及从 `babeld` 读取的接口和链路指标。
 
 ## Babel 采集
 
@@ -13,11 +13,12 @@ local-port 33123
 interface wg-peer type tunnel enable-timestamps true
 ```
 
-Agent 默认连接 `[::1]:33123`。也可以传 TCP 地址或 Unix socket 路径：
+Agent 默认连接 `[::1]:33123`，并从 `dn42_dummy` 上报 IP。Babel 地址支持 TCP 或 Unix socket，节点接口可通过 `--dummy-interface` 修改：
 
 ```bash
-topo42-agent --babel-address '[::1]:33123' ws://127.0.0.1:8000 dn42_cn01 change-me
+topo42-agent ws://127.0.0.1:8000 dn42_cn01 change-me
 topo42-agent --babel-address /run/babeld.sock ws://127.0.0.1:8000 dn42_cn01 change-me
+topo42-agent --dummy-interface node0 ws://127.0.0.1:8000 dn42_cn01 change-me
 ```
 
 所有选项必须放在位置参数之前。Agent 的 Controller 地址传 `ws://` 或 `wss://`。Controller 设置 `--agent-token` 后，最后一个位置参数必须传同一个 token。

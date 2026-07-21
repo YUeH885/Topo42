@@ -14,25 +14,24 @@ import (
 )
 
 const DetectionInterval = 30 * time.Second
-const dn42DummyInterface = "dn42_dummy"
 const babelTimeout = 3 * time.Second
 
-func CollectDN42Detection(babelAddress string) ([]string, []InterfaceRead, error) {
-	nodeIPs := collectDN42DummyIPs()
+func CollectDN42Detection(babelAddress, dummyInterface string) ([]string, []InterfaceRead, error) {
+	nodeIPs := collectNodeIPs(dummyInterface)
 	interfaces, err := collectBabelInterfaces(babelAddress)
 	return nodeIPs, interfaces, err
 }
 
-func collectDN42DummyIPs() []string {
-	iface, err := net.InterfaceByName(dn42DummyInterface)
+func collectNodeIPs(interfaceName string) []string {
+	iface, err := net.InterfaceByName(interfaceName)
 	if err != nil {
 		return []string{}
 	}
 	addresses, _ := iface.Addrs()
 	result := []string{}
 	for _, address := range addresses {
-		if ip := nodeIP(address.String()); ip != "" {
-			result = append(result, ip)
+		if prefix, err := netip.ParsePrefix(address.String()); err == nil {
+			result = append(result, prefix.Addr().String())
 		}
 	}
 	return result
@@ -165,17 +164,4 @@ func babelHelloLoss(reachValue, unicastReachValue string) *float64 {
 	samples := 16 - bits.TrailingZeros16(value)
 	loss := float64(samples-bits.OnesCount16(value)) * 100 / float64(samples)
 	return &loss
-}
-
-func nodeIP(value string) string {
-	prefix, err := netip.ParsePrefix(value)
-	if err != nil {
-		return ""
-	}
-	addr := prefix.Addr()
-	text := addr.String()
-	if addr.IsLinkLocalUnicast() || strings.HasSuffix(text, ".42") || strings.HasSuffix(text, ":42") {
-		return ""
-	}
-	return text
 }

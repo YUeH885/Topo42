@@ -21,10 +21,11 @@ func main() {
 		return
 	}
 	babelAddress := flag.String("babel-address", "[::1]:33123", "")
+	dummyInterface := flag.String("dummy-interface", "dn42_dummy", "")
 	flag.Parse()
 	args := flag.Args()
 	if len(args) != 2 && len(args) != 3 {
-		log.Fatal("usage: topo42-agent [--babel-address address] <server_url> <node_name> [agent_token]")
+		log.Fatal("usage: topo42-agent [--babel-address address] [--dummy-interface name] <server_url> <node_name> [agent_token]")
 	}
 	serverURL, nodeName := args[0], args[1]
 	token := ""
@@ -32,12 +33,12 @@ func main() {
 		token = args[2]
 	}
 	for {
-		log.Printf("agent cycle failed, retrying: %v", runWebSocketClient(serverURL, nodeName, token, *babelAddress, topo.DetectionInterval))
+		log.Printf("agent cycle failed, retrying: %v", runWebSocketClient(serverURL, nodeName, token, *babelAddress, *dummyInterface, topo.DetectionInterval))
 		time.Sleep(topo.DetectionInterval)
 	}
 }
 
-func runWebSocketClient(serverURL, nodeName, token, babelAddress string, interval time.Duration) error {
+func runWebSocketClient(serverURL, nodeName, token, babelAddress, dummyInterface string, interval time.Duration) error {
 	header := http.Header{}
 	if token != "" {
 		header.Set("Authorization", "Bearer "+token)
@@ -53,7 +54,7 @@ func runWebSocketClient(serverURL, nodeName, token, babelAddress string, interva
 	defer conn.Close()
 	log.Printf("connected to controller node=%s", nodeName)
 	for {
-		nodeIPs, interfaces, err := collectDetection(babelAddress)
+		nodeIPs, interfaces, err := collectDetection(babelAddress, dummyInterface)
 		if err != nil {
 			return err
 		}

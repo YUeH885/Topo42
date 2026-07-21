@@ -1,6 +1,9 @@
 package topo
 
-import "testing"
+import (
+	"slices"
+	"testing"
+)
 
 func TestTopologyLinksDetectedInterfaces(t *testing.T) {
 	store := NewStore()
@@ -9,7 +12,7 @@ func TestTopologyLinksDetectedInterfaces(t *testing.T) {
 	localLatency := 20.0
 	localLoss := 5.0
 	store.RecordAgentSnapshot("dn42_cn01", AgentSnapshot{
-		NodeIPs: []string{"172.23.70.1", "fd6a:93d4:3358::1"},
+		NodeIPs: []string{"172.23.70.1", "172.23.70.1", "fd6a:93d4:3358::1"},
 		Interfaces: []InterfaceRead{{
 			Name:              "wg-us",
 			LocalAddress:      "fe80::1",
@@ -40,6 +43,9 @@ func TestTopologyLinksDetectedInterfaces(t *testing.T) {
 	}
 	if !topology.Edges[0].Connected {
 		t.Fatal("edge is not connected")
+	}
+	if !slices.Equal(topology.Nodes[0].NodeIPs, []string{"172.23.70.1", "fd6a:93d4:3358::1"}) {
+		t.Fatalf("node IPs = %#v", topology.Nodes[0].NodeIPs)
 	}
 	local := topology.Nodes[0].Interfaces[0]
 	peer := topology.Nodes[1].Interfaces[0]

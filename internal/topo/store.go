@@ -2,6 +2,7 @@ package topo
 
 import (
 	"net/netip"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -36,7 +37,7 @@ func (s *Store) RecordAgentSnapshot(name string, snapshot AgentSnapshot) {
 	defer s.mu.Unlock()
 	node := s.ensureNodeLocked(name)
 	node.AgentVersion = snapshot.AgentVersion
-	node.NodeIPs = dedupe(snapshot.NodeIPs)
+	node.NodeIPs = snapshot.NodeIPs
 	now := time.Now().UTC()
 	node.LastSeenAt = &now
 	node.Interfaces = snapshot.Interfaces
@@ -47,8 +48,12 @@ func (s *Store) Topology() TopologyRead {
 	defer s.mu.Unlock()
 	now := time.Now().UTC()
 	nodes := make([]*runtimeNode, 0, len(s.nodes))
+	ipNodeCounts := map[string]int{}
 	for _, node := range s.nodes {
 		nodes = append(nodes, node)
+		for _, ip := range node.NodeIPs {
+			ipNodeCounts[ip]++
+		}
 	}
 	sort.Slice(nodes, func(i, j int) bool { return nodeLess(nodes[i], nodes[j]) })
 
@@ -58,6 +63,12 @@ func (s *Store) Topology() TopologyRead {
 	readNodes := make([]NodeRead, 0, len(nodes))
 	addressOwners := interfaceAddressOwners(nodes)
 	for _, node := range nodes {
+		nodeIPs := []string{}
+		for _, ip := range node.NodeIPs {
+			if ipNodeCounts[ip] == 1 {
+				nodeIPs = append(nodeIPs, ip)
+			}
+		}
 		ifaces := append([]InterfaceRead(nil), node.Interfaces...)
 		for index, iface := range ifaces {
 			peer := addressOwners[iface.PeerAddress]
@@ -70,15 +81,14 @@ func (s *Store) Topology() TopologyRead {
 				continue
 			}
 			seenPairs[pair] = true
-			peerIface, ok := peerInterfaceFor(peer, iface.LocalAddress)
-			connected := ok && iface.BabelNeighbor && peerIface.BabelNeighbor &&
-				(iface.PacketLossPercent == nil || *iface.PacketLossPercent != 100) &&
-				(peerIface.PacketLossPercent == nil || *peerIface.PacketLossPercent != 100)
+			connected := iface.BabelNeighbor && slices.ContainsFunc(peer.Interfaces, func(peerIface InterfaceRead) bool {
+				return peerIface.PeerAddress == iface.LocalAddress && peerIface.BabelNeighbor
+			})
 			edges = append(edges, TopologyEdge{LocalNodeName: node.Name, PeerNodeName: peer.Name, Connected: connected})
 		}
 		readNodes = append(readNodes, NodeRead{
 			Name:         node.Name,
-			NodeIPs:      node.NodeIPs,
+			NodeIPs:      nodeIPs,
 			AgentVersion: node.AgentVersion,
 			Online:       node.Active && node.LastSeenAt != nil && now.Sub(*node.LastSeenAt) <= AgentOfflineAfter,
 			LastSeenAt:   node.LastSeenAt,
@@ -109,15 +119,6 @@ func interfaceAddressOwners(nodes []*runtimeNode) map[string]*runtimeNode {
 	return owners
 }
 
-func peerInterfaceFor(peer *runtimeNode, localAddress string) (InterfaceRead, bool) {
-	for _, iface := range peer.Interfaces {
-		if iface.PeerAddress == localAddress {
-			return iface, true
-		}
-	}
-	return InterfaceRead{}, false
-}
-
 func nodeLess(a, b *runtimeNode) bool {
 	aAddr, aOK := firstNodeAddr(a.NodeIPs)
 	bAddr, bOK := firstNodeAddr(b.NodeIPs)
@@ -143,16 +144,4 @@ func firstNodeAddr(values []string) (netip.Addr, bool) {
 		}
 	}
 	return netip.Addr{}, false
-}
-
-func dedupe(values []string) []string {
-	seen := map[string]bool{}
-	result := []string{}
-	for _, value := range values {
-		if !seen[value] {
-			result = append(result, value)
-			seen[value] = true
-		}
-	}
-	return result
 }

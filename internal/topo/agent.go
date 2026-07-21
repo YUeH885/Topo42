@@ -99,15 +99,12 @@ func parseBabelDump(lines []string) []InterfaceRead {
 			locals[name] = babelField(fields, "ipv6")
 		case "neighbour":
 			name := babelField(fields, "if")
-			if name == "" {
-				continue
-			}
 			neighbour := InterfaceRead{
 				Name:        name,
 				PeerAddress: babelField(fields, "address"),
 			}
 			cost, costErr := strconv.ParseUint(babelField(fields, "cost"), 10, 16)
-			neighbour.BabelNeighbor = costErr != nil || cost < 0xffff
+			neighbour.BabelNeighbor = costErr == nil && cost < 0xffff
 			if value, err := strconv.ParseFloat(babelField(fields, "rtt"), 64); err == nil {
 				neighbour.LatencyMS = &value
 			}

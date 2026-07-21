@@ -3,12 +3,11 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
+mkdir -p "$ROOT_DIR/dist"
 
 for target in agent controller; do
-  out_dir="$ROOT_DIR/dist/$target"
   name="topo42-$target-linux-x64"
-  mkdir -p "$out_dir"
-  CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o "$out_dir/$name" "./cmd/topo42-$target"
-  (cd "$out_dir" && sha256sum "$name") > "$out_dir/$name.sha256"
-  echo "$out_dir/$name"
+  CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o "$ROOT_DIR/dist/$name" "./cmd/topo42-$target"
+  (cd "$ROOT_DIR/dist" && sha256sum "$name") > "$ROOT_DIR/dist/$name.sha256"
+  echo "$ROOT_DIR/dist/$name"
 done

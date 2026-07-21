@@ -65,7 +65,8 @@ func (s *Store) Topology() TopologyRead {
 	for _, node := range nodes {
 		nodeIPs := []string{}
 		for _, ip := range node.NodeIPs {
-			if ipNodeCounts[ip] == 1 {
+			addr, _ := netip.ParseAddr(ip)
+			if ipNodeCounts[ip] == 1 && !(addr.Is6() && addr.IsLinkLocalUnicast()) {
 				nodeIPs = append(nodeIPs, ip)
 			}
 		}

@@ -12,7 +12,7 @@ func TestTopologyLinksDetectedInterfaces(t *testing.T) {
 	localLatency := 20.0
 	localLoss := 100.0
 	store.RecordAgentSnapshot("dn42_cn01", AgentSnapshot{
-		NodeIPs: []string{"172.23.70.1", "172.23.70.42", "fd6a:93d4:3358::1"},
+		NodeIPs: []string{"172.23.70.1", "172.23.70.42", "fd6a:93d4:3358::1", "fe80::1"},
 		Interfaces: []InterfaceRead{{
 			Name:              "wg-us",
 			LocalAddress:      "fe80::1",

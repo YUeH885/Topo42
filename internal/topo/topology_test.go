@@ -6,20 +6,30 @@ func TestTopologyLinksDetectedInterfaces(t *testing.T) {
 	store := NewStore()
 	store.SetActive("dn42_cn01", true)
 	store.SetActive("dn42_us02", true)
+	localLatency := 20.0
+	localLoss := 5.0
 	store.RecordAgentSnapshot("dn42_cn01", AgentSnapshot{
 		NodeIPs: []string{"172.23.70.1", "fd6a:93d4:3358::1"},
 		Interfaces: []InterfaceRead{{
-			Name: "dn42_us02",
+			Name:              "wg-us",
+			LocalAddress:      "fe80::1",
+			PeerAddress:       "fe80::2",
+			BabelNeighbor:     true,
+			LatencyMS:         &localLatency,
+			PacketLossPercent: &localLoss,
 		}},
 	})
-	latency := 10.0
-	loss := 33.0
+	peerLatency := 10.0
+	peerLoss := 33.0
 	store.RecordAgentSnapshot("dn42_us02", AgentSnapshot{
 		NodeIPs: []string{"172.23.70.2", "fd6a:93d4:3358::2"},
 		Interfaces: []InterfaceRead{{
-			Name:              "dn42_cn01",
-			LatencyMS:         &latency,
-			PacketLossPercent: &loss,
+			Name:              "tunnel.cn",
+			LocalAddress:      "fe80::2",
+			PeerAddress:       "fe80::1",
+			BabelNeighbor:     true,
+			LatencyMS:         &peerLatency,
+			PacketLossPercent: &peerLoss,
 		}},
 	})
 
@@ -28,16 +38,27 @@ func TestTopologyLinksDetectedInterfaces(t *testing.T) {
 	if len(topology.Edges) != 1 {
 		t.Fatalf("edges = %d, want 1", len(topology.Edges))
 	}
-	edge := topology.Edges[0]
-	if !edge.Connected {
+	if !topology.Edges[0].Connected {
 		t.Fatal("edge is not connected")
 	}
-	if edge.LatencyMS == nil || *edge.LatencyMS != 10.0 {
-		t.Fatalf("latency = %#v", edge.LatencyMS)
+	local := topology.Nodes[0].Interfaces[0]
+	peer := topology.Nodes[1].Interfaces[0]
+	if local.LatencyMS == nil || *local.LatencyMS != 20.0 || peer.LatencyMS == nil || *peer.LatencyMS != 10.0 {
+		t.Fatalf("latencies = %#v / %#v", local.LatencyMS, peer.LatencyMS)
 	}
-	loss = 100
-	if store.Topology().Edges[0].Connected {
-		t.Fatal("edge with 100% packet loss is connected")
+	if local.PacketLossPercent == nil || *local.PacketLossPercent != 5.0 || peer.PacketLossPercent == nil || *peer.PacketLossPercent != 33.0 {
+		t.Fatalf("losses = %#v / %#v", local.PacketLossPercent, peer.PacketLossPercent)
+	}
+	if got := local.PeerNodeName; got != "dn42_us02" {
+		t.Fatalf("peer node = %q", got)
+	}
+	store.RecordAgentSnapshot("dn42_cn01", AgentSnapshot{
+		NodeIPs:    []string{"172.23.70.1", "fd6a:93d4:3358::1"},
+		Interfaces: []InterfaceRead{{Name: "wg-us", LocalAddress: "fe80::1"}},
+	})
+	topology = store.Topology()
+	if len(topology.Edges) != 1 || topology.Edges[0].Connected {
+		t.Fatalf("missing Babel neighbour edge = %#v", topology.Edges)
 	}
 }
 

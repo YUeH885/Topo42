@@ -2,20 +2,17 @@ package topo
 
 import (
 	"net/netip"
-	"regexp"
 	"sort"
 	"sync"
 	"time"
 )
-
-var NodePattern = regexp.MustCompile(`^dn42_[a-z]{2}\d{2}$`)
 
 type runtimeNode struct {
 	Name         string
 	NodeIPs      []string
 	AgentVersion string
 	LastSeenAt   *time.Time
-	Interfaces   map[string]InterfaceRead
+	Interfaces   []InterfaceRead
 	Active       bool
 }
 
@@ -42,23 +39,7 @@ func (s *Store) RecordAgentSnapshot(name string, snapshot AgentSnapshot) {
 	node.NodeIPs = dedupe(snapshot.NodeIPs)
 	now := time.Now().UTC()
 	node.LastSeenAt = &now
-	node.Interfaces = map[string]InterfaceRead{}
-	for _, item := range snapshot.Interfaces {
-		node.Interfaces[item.Name] = item
-	}
-}
-
-func (s *Store) PeerNodeIPsFor(name string) map[string][]string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	peers := map[string][]string{}
-	for nodeName, node := range s.nodes {
-		if nodeName == name || len(node.NodeIPs) == 0 {
-			continue
-		}
-		peers[nodeName] = append([]string(nil), node.NodeIPs...)
-	}
-	return peers
+	node.Interfaces = snapshot.Interfaces
 }
 
 func (s *Store) Topology() TopologyRead {
@@ -72,46 +53,32 @@ func (s *Store) Topology() TopologyRead {
 	sort.Slice(nodes, func(i, j int) bool { return nodeLess(nodes[i], nodes[j]) })
 
 	edges := []TopologyEdge{}
+	// ponytail: 当前 UI 每对节点只画一条边；需要展示并行链路时再把接口地址加入边 ID。
 	seenPairs := map[[2]string]bool{}
 	readNodes := make([]NodeRead, 0, len(nodes))
+	addressOwners := interfaceAddressOwners(nodes)
 	for _, node := range nodes {
-		names := make([]string, 0, len(node.Interfaces))
-		for name := range node.Interfaces {
-			names = append(names, name)
-		}
-		sort.Strings(names)
-		ifaces := make([]InterfaceRead, 0, len(node.Interfaces))
-		for _, name := range names {
-			iface := node.Interfaces[name]
-			ifaces = append(ifaces, iface)
-			peer := s.nodes[iface.Name]
-			if peer == nil || peer.Name == node.Name {
+		ifaces := append([]InterfaceRead(nil), node.Interfaces...)
+		for index, iface := range ifaces {
+			peer := addressOwners[iface.PeerAddress]
+			if peer == nil || peer == node {
 				continue
 			}
+			ifaces[index].PeerNodeName = peer.Name
 			pair := [2]string{min(node.Name, peer.Name), max(node.Name, peer.Name)}
 			if seenPairs[pair] {
 				continue
 			}
 			seenPairs[pair] = true
-			peerIface, ok := peer.Interfaces[node.Name]
-			latency, loss := iface.LatencyMS, iface.PacketLossPercent
-			if latency == nil {
-				latency = peerIface.LatencyMS
-			}
-			if loss == nil {
-				loss = peerIface.PacketLossPercent
-			}
-			edges = append(edges, TopologyEdge{
-				LocalNodeName:     node.Name,
-				PeerNodeName:      peer.Name,
-				Connected:         ok && (loss == nil || *loss != 100),
-				LatencyMS:         latency,
-				PacketLossPercent: loss,
-			})
+			peerIface, ok := peerInterfaceFor(peer, iface.LocalAddress)
+			connected := ok && iface.BabelNeighbor && peerIface.BabelNeighbor &&
+				(iface.PacketLossPercent == nil || *iface.PacketLossPercent != 100) &&
+				(peerIface.PacketLossPercent == nil || *peerIface.PacketLossPercent != 100)
+			edges = append(edges, TopologyEdge{LocalNodeName: node.Name, PeerNodeName: peer.Name, Connected: connected})
 		}
 		readNodes = append(readNodes, NodeRead{
 			Name:         node.Name,
-			NodeIPs:      append([]string(nil), node.NodeIPs...),
+			NodeIPs:      node.NodeIPs,
 			AgentVersion: node.AgentVersion,
 			Online:       node.Active && node.LastSeenAt != nil && now.Sub(*node.LastSeenAt) <= AgentOfflineAfter,
 			LastSeenAt:   node.LastSeenAt,
@@ -124,10 +91,31 @@ func (s *Store) Topology() TopologyRead {
 func (s *Store) ensureNodeLocked(name string) *runtimeNode {
 	node := s.nodes[name]
 	if node == nil {
-		node = &runtimeNode{Name: name, NodeIPs: []string{}, Interfaces: map[string]InterfaceRead{}}
+		node = &runtimeNode{Name: name, NodeIPs: []string{}, Interfaces: []InterfaceRead{}}
 		s.nodes[name] = node
 	}
 	return node
+}
+
+func interfaceAddressOwners(nodes []*runtimeNode) map[string]*runtimeNode {
+	owners := map[string]*runtimeNode{}
+	for _, node := range nodes {
+		for _, iface := range node.Interfaces {
+			if iface.LocalAddress != "" {
+				owners[iface.LocalAddress] = node
+			}
+		}
+	}
+	return owners
+}
+
+func peerInterfaceFor(peer *runtimeNode, localAddress string) (InterfaceRead, bool) {
+	for _, iface := range peer.Interfaces {
+		if iface.PeerAddress == localAddress {
+			return iface, true
+		}
+	}
+	return InterfaceRead{}, false
 }
 
 func nodeLess(a, b *runtimeNode) bool {

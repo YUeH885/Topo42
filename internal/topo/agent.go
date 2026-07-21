@@ -1,55 +1,170 @@
 package topo
 
 import (
-	"encoding/binary"
+	"bufio"
+	"errors"
+	"fmt"
+	"math/bits"
 	"net"
 	"net/netip"
-	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
-
-	"golang.org/x/net/icmp"
-	"golang.org/x/net/ipv6"
 )
 
 const DetectionInterval = 30 * time.Second
 const dn42DummyInterface = "dn42_dummy"
-const pingCount = 10
-const pingTimeout = time.Second
+const babelTimeout = 3 * time.Second
 
-var runPing = icmpPingStats
+func CollectDN42Detection(babelAddress string) ([]string, []InterfaceRead, error) {
+	nodeIPs := collectDN42DummyIPs()
+	interfaces, err := collectBabelInterfaces(babelAddress)
+	return nodeIPs, interfaces, err
+}
 
-func CollectDN42Detection(peers map[string][]string) ([]string, []InterfaceRead) {
-	interfaces, err := net.Interfaces()
+func collectDN42DummyIPs() []string {
+	iface, err := net.InterfaceByName(dn42DummyInterface)
 	if err != nil {
-		return []string{}, []InterfaceRead{}
+		return []string{}
 	}
-	nodeIPs := []string{}
-	names := []string{}
-	for _, item := range interfaces {
-		if item.Name == dn42DummyInterface {
-			addresses, _ := item.Addrs()
-			for _, address := range addresses {
-				if ip := nodeIP(address.String()); ip != "" {
-					nodeIPs = append(nodeIPs, ip)
-				}
+	addresses, _ := iface.Addrs()
+	result := []string{}
+	for _, address := range addresses {
+		if ip := nodeIP(address.String()); ip != "" {
+			result = append(result, ip)
+		}
+	}
+	return result
+}
+
+func collectBabelInterfaces(address string) ([]InterfaceRead, error) {
+	network := "tcp"
+	if strings.HasPrefix(address, "/") {
+		network = "unix"
+	}
+	conn, err := net.DialTimeout(network, address, babelTimeout)
+	if err != nil {
+		return nil, fmt.Errorf("connect to babeld: %w", err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(babelTimeout))
+	scanner := bufio.NewScanner(conn)
+	header, err := readBabelReply(scanner)
+	if err != nil {
+		return nil, fmt.Errorf("read babeld header: %w", err)
+	}
+	if len(header) == 0 || header[0] != "BABEL 1.0" {
+		return nil, errors.New("unsupported babeld local protocol")
+	}
+	if _, err := fmt.Fprintln(conn, "dump"); err != nil {
+		return nil, fmt.Errorf("request babeld dump: %w", err)
+	}
+	lines, err := readBabelReply(scanner)
+	if err != nil {
+		return nil, fmt.Errorf("read babeld dump: %w", err)
+	}
+	return parseBabelDump(lines), nil
+}
+
+func readBabelReply(scanner *bufio.Scanner) ([]string, error) {
+	lines := []string{}
+	for scanner.Scan() {
+		line := scanner.Text()
+		switch {
+		case line == "ok":
+			return lines, nil
+		case line == "bad" || line == "no" || strings.HasPrefix(line, "no "):
+			return nil, errors.New(line)
+		default:
+			lines = append(lines, line)
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	return nil, errors.New("babeld closed the connection")
+}
+
+func parseBabelDump(lines []string) []InterfaceRead {
+	locals := map[string]string{}
+	neighbours := map[string][]InterfaceRead{}
+	for _, line := range lines {
+		fields := strings.Fields(line)
+		if len(fields) < 3 || fields[0] != "add" {
+			continue
+		}
+		switch fields[1] {
+		case "interface":
+			name := fields[2]
+			locals[name] = babelField(fields, "ipv6")
+		case "neighbour":
+			name := babelField(fields, "if")
+			if name == "" {
+				continue
 			}
-		}
-		if NodePattern.MatchString(item.Name) {
-			names = append(names, item.Name)
+			neighbour := InterfaceRead{
+				Name:        name,
+				PeerAddress: babelField(fields, "address"),
+			}
+			cost, costErr := strconv.ParseUint(babelField(fields, "cost"), 10, 16)
+			neighbour.BabelNeighbor = costErr != nil || cost < 0xffff
+			if value, err := strconv.ParseFloat(babelField(fields, "rtt"), 64); err == nil {
+				neighbour.LatencyMS = &value
+			}
+			if loss := babelHelloLoss(babelField(fields, "reach"), babelField(fields, "ureach")); loss != nil {
+				neighbour.PacketLossPercent = loss
+			}
+			neighbours[name] = append(neighbours[name], neighbour)
 		}
 	}
-	detected := []InterfaceRead{}
-	for _, name := range names {
-		latency, loss := pingStats(name, peers[name], nodeIPs)
-		detected = append(detected, InterfaceRead{
-			Name:              name,
-			LatencyMS:         latency,
-			PacketLossPercent: loss,
-		})
+
+	result := []InterfaceRead{}
+	for name, localAddress := range locals {
+		items := neighbours[name]
+		if len(items) == 0 {
+			items = []InterfaceRead{{Name: name}}
+		}
+		for _, item := range items {
+			item.LocalAddress = localAddress
+			result = append(result, item)
+		}
 	}
-	return nodeIPs, detected
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Name != result[j].Name {
+			return result[i].Name < result[j].Name
+		}
+		return result[i].PeerAddress < result[j].PeerAddress
+	})
+	return result
+}
+
+func babelField(fields []string, name string) string {
+	for index := 0; index+1 < len(fields); index++ {
+		if fields[index] == name {
+			return fields[index+1]
+		}
+	}
+	return ""
+}
+
+func babelHelloLoss(reachValue, unicastReachValue string) *float64 {
+	if reachValue == "0000" {
+		reachValue = unicastReachValue
+	}
+	reach, err := strconv.ParseUint(reachValue, 16, 16)
+	if err != nil {
+		return nil
+	}
+	if reach == 0 {
+		loss := 100.0
+		return &loss
+	}
+	value := uint16(reach)
+	// 只统计首次收到 Hello 后的窗口，避免把启动阶段尚未填充的低位算作丢包。
+	samples := 16 - bits.TrailingZeros16(value)
+	loss := float64(samples-bits.OnesCount16(value)) * 100 / float64(samples)
+	return &loss
 }
 
 func nodeIP(value string) string {
@@ -63,124 +178,4 @@ func nodeIP(value string) string {
 		return ""
 	}
 	return text
-}
-
-func dummyIPv6ToLinkLocal(value string) string {
-	addr, err := netip.ParseAddr(value)
-	if err != nil || !addr.Is6() || addr.IsLinkLocalUnicast() {
-		return ""
-	}
-	bytes := addr.As16()
-	parts := []string{}
-	for index := 2; index < len(bytes); index += 2 {
-		group := binary.BigEndian.Uint16(bytes[index : index+2])
-		if group != 0 {
-			parts = append(parts, strconv.FormatUint(uint64(group), 16))
-		}
-	}
-	if len(parts) == 0 {
-		return ""
-	}
-	return "fe80::" + strings.Join(parts, ":")
-}
-
-func peerIPIsSmaller(localNodeIPs, peerNodeIPs []string) bool {
-	for _, want4 := range []bool{true, false} {
-		localIP, localOK := firstAddrVersion(localNodeIPs, want4)
-		peerIP, peerOK := firstAddrVersion(peerNodeIPs, want4)
-		if localOK && peerOK {
-			return peerIP.Compare(localIP) < 0
-		}
-	}
-	return false
-}
-
-func pingStats(interfaceName string, peerNodeIPs, localNodeIPs []string) (*float64, *float64) {
-	if !peerIPIsSmaller(localNodeIPs, peerNodeIPs) {
-		return nil, nil
-	}
-	for _, value := range peerNodeIPs {
-		address := dummyIPv6ToLinkLocal(value)
-		if address == "" {
-			continue
-		}
-		latency, loss := runPing(interfaceName, address)
-		if latency != nil || loss != nil {
-			return latency, loss
-		}
-	}
-	return nil, nil
-}
-
-func icmpPingStats(interfaceName, address string) (*float64, *float64) {
-	ip := net.ParseIP(address)
-	if ip == nil {
-		return nil, nil
-	}
-	conn, err := icmp.ListenPacket("ip6:ipv6-icmp", "::")
-	if err != nil {
-		return nil, nil
-	}
-	defer conn.Close()
-
-	id := os.Getpid() & 0xffff
-	target := &net.IPAddr{IP: ip, Zone: interfaceName}
-	buffer := make([]byte, 1500)
-	received := 0
-	total := time.Duration(0)
-	for seq := 0; seq < pingCount; seq++ {
-		message := icmp.Message{
-			Type: ipv6.ICMPTypeEchoRequest,
-			Body: &icmp.Echo{ID: id, Seq: seq, Data: []byte("topo42")},
-		}
-		raw, err := message.Marshal(nil)
-		if err != nil {
-			continue
-		}
-		start := time.Now()
-		if _, err := conn.WriteTo(raw, target); err != nil {
-			continue
-		}
-		if readICMPEchoReply(conn, buffer, id, seq, start.Add(pingTimeout)) {
-			received++
-			total += time.Since(start)
-		}
-	}
-
-	loss := float64(pingCount-received) * 100 / pingCount
-	if received == 0 {
-		return nil, &loss
-	}
-	latency := float64(total.Microseconds()) / 1000 / float64(received)
-	return &latency, &loss
-}
-
-func readICMPEchoReply(conn *icmp.PacketConn, buffer []byte, id, seq int, deadline time.Time) bool {
-	for {
-		if err := conn.SetReadDeadline(deadline); err != nil {
-			return false
-		}
-		n, _, err := conn.ReadFrom(buffer)
-		if err != nil {
-			return false
-		}
-		message, err := icmp.ParseMessage(ipv6.ICMPTypeEchoReply.Protocol(), buffer[:n])
-		if err != nil || message.Type != ipv6.ICMPTypeEchoReply {
-			continue
-		}
-		echo, ok := message.Body.(*icmp.Echo)
-		if ok && echo.ID == id && echo.Seq == seq {
-			return true
-		}
-	}
-}
-
-func firstAddrVersion(values []string, want4 bool) (netip.Addr, bool) {
-	for _, value := range values {
-		addr, err := netip.ParseAddr(value)
-		if err == nil && addr.Is4() == want4 {
-			return addr, true
-		}
-	}
-	return netip.Addr{}, false
 }

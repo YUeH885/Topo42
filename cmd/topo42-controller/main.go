@@ -44,14 +44,12 @@ func main() {
 
 func topologyHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(store.Topology()); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-	}
+	_ = json.NewEncoder(w).Encode(store.Topology())
 }
 
 func agentWSHandler(w http.ResponseWriter, r *http.Request) {
 	node := r.URL.Query().Get("node")
-	if !topo.NodePattern.MatchString(node) {
+	if node == "" {
 		http.Error(w, "invalid node", http.StatusForbidden)
 		return
 	}
@@ -81,9 +79,6 @@ func agentWSHandler(w http.ResponseWriter, r *http.Request) {
 		_ = conn.Close()
 	}()
 	log.Printf("agent connected node=%s", node)
-	if err := conn.WriteJSON(store.PeerNodeIPsFor(node)); err != nil {
-		return
-	}
 	for {
 		var snapshot topo.AgentSnapshot
 		if err := conn.ReadJSON(&snapshot); err != nil {
@@ -91,8 +86,5 @@ func agentWSHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		store.RecordAgentSnapshot(node, snapshot)
-		if err := conn.WriteJSON(store.PeerNodeIPsFor(node)); err != nil {
-			return
-		}
 	}
 }

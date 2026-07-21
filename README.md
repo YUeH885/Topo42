@@ -1,36 +1,31 @@
 # Topo42
 
-dn42 WireGuard 拓扑面板。Controller 提供 Web UI，Agent 上报本机 `dn42_dummy` IP、`dn42_xx00` 接口和链路探测结果。
+dn42 Babel 拓扑面板。Controller 提供 Web UI，Agent 上报本机 `dn42_dummy` IP，以及从 `babeld` 读取的接口和链路指标。
 
-## 命名
+## Babel 采集
 
-节点名和 WireGuard 接口名都必须匹配：
+Agent 每 30 秒连接一次 `babeld` 只读本地协议，读取已配置的接口、邻居平滑 RTT 和 Hello 接收历史。丢包率来自 `reach`/`ureach` 位图，是 Babel Hello 的短窗口估值，不是 ICMP 丢包率。
 
-```text
-dn42_de01
-```
-
-格式是 `dn42_` + 两位小写字母 + 两位数字。接口名就是对端节点名。
-
-## ICMP 探测
-
-Controller 把已知节点的 `dn42_dummy` IP 发给 Agent。Agent 只在“对端 dummy IP 小于本机 dummy IP”时发起探测，避免两端同时探测。
-
-探测目标使用对端 dummy IPv6 派生出的链路本地地址：
+`babeld` 至少需要配置只读本地端口，并在参与采集的接口上启用时间戳：
 
 ```text
-fd6a:93d4:3358::35 -> fe80::93d4:3358:35
+local-port 33123
+interface wg-peer type tunnel enable-timestamps true
 ```
 
-Agent 直接发送 ICMPv6 Echo，统计 10 次探测的平均 RTT 和丢包率。
+Agent 默认连接 `[::1]:33123`。也可以传 TCP 地址或 Unix socket 路径：
 
-Agent 的 Controller 地址传 `ws://` 或 `wss://`。Controller 设置 `--agent-token` 后，Agent 第三个参数必须传同一个 token。
+```bash
+topo42-agent --babel-address '[::1]:33123' ws://127.0.0.1:8000 dn42_cn01 change-me
+topo42-agent --babel-address /run/babeld.sock ws://127.0.0.1:8000 dn42_cn01 change-me
+```
+
+所有选项必须放在位置参数之前。Agent 的 Controller 地址传 `ws://` 或 `wss://`。Controller 设置 `--agent-token` 后，最后一个位置参数必须传同一个 token。
 
 ## 构建
 
 需要 Go 1.22+。
 
 ```bash
-scripts/build-binary.sh controller
-scripts/build-binary.sh agent
+scripts/build-binary.sh
 ```

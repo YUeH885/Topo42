@@ -2,12 +2,16 @@ package topo
 
 import "time"
 
-const Version = "0.7.0"
+const Version = "0.8.0"
 
 const AgentOfflineAfter = 90 * time.Second
 
 type InterfaceRead struct {
 	Name              string   `json:"name"`
+	LocalAddress      string   `json:"local_address,omitempty"`
+	PeerAddress       string   `json:"peer_address,omitempty"`
+	PeerNodeName      string   `json:"peer_node_name,omitempty"`
+	BabelNeighbor     bool     `json:"babel_neighbor,omitempty"`
 	LatencyMS         *float64 `json:"latency_ms"`
 	PacketLossPercent *float64 `json:"packet_loss_percent"`
 }
@@ -22,11 +26,9 @@ type NodeRead struct {
 }
 
 type TopologyEdge struct {
-	LocalNodeName     string   `json:"local_node_name"`
-	PeerNodeName      string   `json:"peer_node_name"`
-	Connected         bool     `json:"connected"`
-	LatencyMS         *float64 `json:"latency_ms"`
-	PacketLossPercent *float64 `json:"packet_loss_percent"`
+	LocalNodeName string `json:"local_node_name"`
+	PeerNodeName  string `json:"peer_node_name"`
+	Connected     bool   `json:"connected"`
 }
 
 type TopologyRead struct {

@@ -31,7 +31,7 @@ function esc(value) {
 }
 
 function nodePositions(nodes) {
-  const count = Math.max(nodes.length, 1);
+  const count = nodes.length;
   const radiusX = Math.max(180, Math.min(500, count * 54));
   const radiusY = Math.max(150, Math.min(260, count * 30));
   return Object.fromEntries(nodes.map((node, index) => {
@@ -60,7 +60,7 @@ function edgeLabelBounds(x, y, text) {
 function edgeLabelPosition(anchor, peer, text, occupied) {
   const dx = peer.x - anchor.x;
   const dy = peer.y - anchor.y;
-  const length = Math.hypot(dx, dy) || 1;
+  const length = Math.hypot(dx, dy);
 
   for (const offset of EDGE_LABEL_OFFSETS) {
     for (const fraction of EDGE_LABEL_FRACTIONS) {
@@ -93,24 +93,24 @@ function renderTopologyCanvas(positions) {
   topology.edges.forEach((edge) => {
     const source = positions[edge.local_node_name];
     const target = positions[edge.peer_node_name];
-    if (!source || !target) return;
-    const packetLoss = edge.packet_loss_percent;
+    const selectedNode = topology.nodes.find((node) => node.name === selectedNodeName);
+    const selectedInterface = selectedNode?.interfaces.find((item) => item.peer_node_name === (selectedNodeName === edge.local_node_name ? edge.peer_node_name : edge.local_node_name));
     const related = selectedNodeName === edge.local_node_name || selectedNodeName === edge.peer_node_name;
     const classes = `topologyEdge ${edge.connected ? "healthy" : "down"}${related ? " related" : ""}${selectedNodeName && !related ? " dimmed" : ""}`;
     edgeLines.push(`<g class="${classes}"><line x1="${source.x}" y1="${source.y}" x2="${target.x}" y2="${target.y}"></line></g>`);
     if (related) {
-      const labelText = linkMetricLabel(edge.latency_ms, packetLoss);
+      const labelText = linkMetricLabel(selectedInterface?.latency_ms, selectedInterface?.packet_loss_percent);
       if (labelText !== "- / -") {
         const labelAnchor = selectedNodeName === edge.local_node_name ? source : target;
         const labelPeer = selectedNodeName === edge.local_node_name ? target : source;
         const label = edgeLabelPosition(labelAnchor, labelPeer, labelText, occupied);
         occupied.push(label.bounds);
-        edgeLabels.push(`<text class="topologyEdgeLabel${packetLoss > 0 ? " lossy" : ""}" x="${label.x}" y="${label.y}">${esc(labelText)}</text>`);
+        edgeLabels.push(`<text class="topologyEdgeLabel${selectedInterface?.packet_loss_percent > 0 ? " lossy" : ""}" x="${label.x}" y="${label.y}">${esc(labelText)}</text>`);
       }
     }
   });
   const nodes = topology.nodes.map((node) => {
-    const position = positions[node.name] || { x: TOPOLOGY_WIDTH / 2, y: TOPOLOGY_HEIGHT / 2 };
+    const position = positions[node.name];
     return `<g class="topologyNode${node.online ? " online" : ""}${node.name === selectedNodeName ? " selected" : ""}" data-node="${esc(node.name)}" transform="translate(${position.x - NODE_WIDTH / 2} ${position.y - NODE_HEIGHT / 2})">
       <rect width="${NODE_WIDTH}" height="${NODE_HEIGHT}" rx="8"></rect>
       <rect class="nodeAccent" width="4" height="${NODE_HEIGHT}" rx="2"></rect>
@@ -133,21 +133,24 @@ function render() {
   const runningEdgeCount = topology.edges.filter((edge) => edge.connected).length;
   // ponytail: linear lookups suit this small topology; index nodes and edges if it grows.
   const interfaces = selectedInterfaces.map((item) => {
-    const peerNodeIPs = nodes.find((node) => node.name === item.name)?.node_ips || [];
+    const peerNodeName = item.peer_node_name;
+    const peerNodeIPs = nodes.find((node) => node.name === peerNodeName)?.node_ips || [];
     const ipv4 = peerNodeIPs.filter((ip) => ip.includes(".")).join(", ");
     const ipv6 = peerNodeIPs.filter((ip) => ip.includes(":")).join(", ");
     const edge = topology.edges.find((edge) => (
-      (edge.local_node_name === selectedNode.name && edge.peer_node_name === item.name) ||
-      (edge.peer_node_name === selectedNode.name && edge.local_node_name === item.name)
+      (edge.local_node_name === selectedNode.name && edge.peer_node_name === peerNodeName) ||
+      (edge.peer_node_name === selectedNode.name && edge.local_node_name === peerNodeName)
     ));
+    const connected = edge?.connected ?? item.babel_neighbor;
     return `<article class="statusRow">
       <div>
         <strong>${esc(item.name)}</strong>
+        <small>对端节点: ${esc(peerNodeName || "-")}</small>
         <small>对端 IPv4: ${esc(ipv4 || "-")}</small>
         ${ipv6 ? `<small>对端 IPv6: ${esc(ipv6)}</small>` : ""}
-        <small>RTT/丢包: ${esc(linkMetricLabel(edge?.latency_ms ?? item.latency_ms, edge?.packet_loss_percent ?? item.packet_loss_percent))}</small>
+        <small>Babel RTT/Hello 丢包: ${esc(linkMetricLabel(item.latency_ms, item.packet_loss_percent))}</small>
       </div>
-      <em class="statusPill ${edge?.connected ? "healthy" : "unknown"}">${edge?.connected ? "已连接" : "离线"}</em>
+      <em class="statusPill ${connected ? "healthy" : "unknown"}">${connected ? "已连接" : "离线"}</em>
     </article>`;
   }).join("");
 
@@ -174,7 +177,7 @@ function render() {
         </div>` : '<div class="empty">在网络拓扑中选择一个节点查看状态。</div>'}
         <div class="sectionBlock">
           <h3>接口</h3>
-          <div class="statusList">${interfaces}${selectedNode && selectedInterfaces.length === 0 ? '<div class="empty">当前节点未检测到 dn42 接口。</div>' : ""}</div>
+          <div class="statusList">${interfaces}${selectedNode && selectedInterfaces.length === 0 ? '<div class="empty">当前节点未检测到 Babel 接口。</div>' : ""}</div>
         </div>
       </section>
     </section>`;

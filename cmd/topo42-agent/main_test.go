@@ -12,6 +12,11 @@ import (
 )
 
 func TestWebSocketSnapshotExchange(t *testing.T) {
+	originalCollectDetection := collectDetection
+	defer func() { collectDetection = originalCollectDetection }()
+	collectDetection = func(string) ([]string, []topo.InterfaceRead, error) {
+		return []string{"172.23.70.1"}, []topo.InterfaceRead{}, nil
+	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
 		if err != nil {
@@ -19,10 +24,6 @@ func TestWebSocketSnapshotExchange(t *testing.T) {
 			return
 		}
 		defer conn.Close()
-		if err := conn.WriteJSON(map[string][]string{}); err != nil {
-			t.Error(err)
-			return
-		}
 		var snapshot topo.AgentSnapshot
 		if err := conn.ReadJSON(&snapshot); err != nil {
 			t.Error(err)
@@ -35,7 +36,7 @@ func TestWebSocketSnapshotExchange(t *testing.T) {
 	defer server.Close()
 
 	serverURL := "ws" + strings.TrimPrefix(server.URL, "http")
-	if err := runWebSocketClient(serverURL, "dn42_us01", "", 0); err == nil {
+	if err := runWebSocketClient(serverURL, "dn42_us01", "", "127.0.0.1:33123", 0); err == nil {
 		t.Fatal("expected disconnect error")
 	}
 }

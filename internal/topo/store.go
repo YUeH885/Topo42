@@ -40,7 +40,7 @@ func (s *Store) RecordAgentSnapshot(name string, snapshot AgentSnapshot) {
 	node.NodeIPs = snapshot.NodeIPs
 	now := time.Now().UTC()
 	node.LastSeenAt = &now
-	node.Interfaces = snapshot.Interfaces
+	node.Interfaces = retainPeerAddresses(node.Interfaces, snapshot.Interfaces)
 }
 
 func (s *Store) Topology() TopologyRead {
@@ -118,6 +118,24 @@ func interfaceAddressOwners(nodes []*runtimeNode) map[string]*runtimeNode {
 		}
 	}
 	return owners
+}
+
+// ponytail: 仅保留当前进程内的上一帧；需要跨 Controller 重启保持链路时再持久化历史。
+func retainPeerAddresses(previous, current []InterfaceRead) []InterfaceRead {
+	previousByName := map[string]InterfaceRead{}
+	for _, iface := range previous {
+		if iface.PeerAddress != "" {
+			previousByName[iface.Name] = iface
+		}
+	}
+	result := slices.Clone(current)
+	for index := range result {
+		previous, ok := previousByName[result[index].Name]
+		if ok && result[index].PeerAddress == "" && result[index].LocalAddress == previous.LocalAddress {
+			result[index].PeerAddress = previous.PeerAddress
+		}
+	}
+	return result
 }
 
 func nodeLess(a, b *runtimeNode) bool {

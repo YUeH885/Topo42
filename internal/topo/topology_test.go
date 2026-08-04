@@ -69,6 +69,22 @@ func TestTopologyLinksDetectedInterfaces(t *testing.T) {
 	if len(topology.Edges) != 1 || topology.Edges[0].Connected {
 		t.Fatalf("missing Babel neighbour edge = %#v", topology.Edges)
 	}
+	store.RecordAgentSnapshot("dn42_us02", AgentSnapshot{
+		NodeIPs: []string{"172.23.70.2", "fd6a:93d4:3358::2"},
+		Interfaces: []InterfaceRead{{
+			Name:         "tunnel.cn",
+			LocalAddress: "fe80::2",
+		}},
+	})
+	topology = store.Topology()
+	if len(topology.Edges) != 1 || topology.Edges[0].Connected {
+		t.Fatalf("stale Babel neighbour edge = %#v", topology.Edges)
+	}
+	for _, node := range topology.Nodes {
+		if len(node.Interfaces) != 1 || node.Interfaces[0].PeerNodeName == "" {
+			t.Fatalf("stale peer mapping for %s = %#v", node.Name, node.Interfaces)
+		}
+	}
 }
 
 func TestTopologySortsNodesByIP(t *testing.T) {
